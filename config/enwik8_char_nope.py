@@ -1,7 +1,7 @@
 import math
 
 # Configuration for the modified model
-out_dir = 'out-enwik8-char-rope'  # Output directory for model checkpoints and logs
+out_dir = 'out-enwik8-char-nope'  # Output directory for model checkpoints and logs
 eval_interval = 500
 eval_iters = 200
 log_interval = 100
@@ -20,7 +20,6 @@ block_size = 256  # Context length
 n_layer = 8
 n_head = 8
 n_embd = 512
-freq = 10000  # Frequency parameter for RoPE
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 

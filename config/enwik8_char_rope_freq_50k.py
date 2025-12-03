@@ -20,7 +20,7 @@ block_size = 256  # Context length
 n_layer = 8
 n_head = 8
 n_embd = 512
-freq = 10000  # Frequency parameter for RoPE
+freq = 50000  # Frequency parameter for RoPE
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 
