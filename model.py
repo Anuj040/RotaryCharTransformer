@@ -113,6 +113,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     dropout: float = 0.0
+    freq: int = 10000  # Frequency for RoPE
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     model_type: str = 'baseline'  # 'baseline', 'rope', etc.
 
