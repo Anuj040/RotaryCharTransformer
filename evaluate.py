@@ -4,6 +4,7 @@ import argparse
 import pickle
 import math
 from model import GPTConfig, GPT
+from model_baseline import BaselineGPT
 from model_rope import GPTWithRoPE
 
 def evaluate(model, data_loader, device):
@@ -51,7 +52,7 @@ if __name__ == '__main__':
         model = GPTWithRoPE(model_config)
         print("Using GPTWithRoPE model.")
     else:
-        model = GPT(model_config)
+        model = BaselineGPT(model_config)
         print("Using BaselineGPT model.")
 
     # Load the model state
@@ -63,7 +64,7 @@ if __name__ == '__main__':
     batch_size = ckpt_config.get('batch_size', 64)  # Default to 64 if not specified
 
     # Load validation data
-    val_data = np.memmap(f'data/{args.dataset}/val.bin', dtype=np.uint16, mode='r')
+    val_data = np.memmap(f'data/{args.dataset}/test.bin', dtype=np.uint16, mode='r')
     val_data = torch.from_numpy(val_data.astype(np.int64))
 
     # Create sequences of block_size
@@ -90,4 +91,4 @@ if __name__ == '__main__':
     # Evaluate
     val_loss = evaluate(model, val_loader, device)
     bpc = val_loss / math.log(2)
-    print(f"Validation Loss: {val_loss:.4f}, Bits per character (bpc): {bpc:.4f}")
+    print(f"Test Loss: {val_loss:.4f}, Bits per character (bpc): {bpc:.4f}")

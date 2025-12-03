@@ -186,7 +186,7 @@ def main():
 
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
-                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f} | val_bpc {losses['val'] / math.log(2):8.3f}")
                 if losses['val'] < best_val_loss or config['always_save_checkpoint']:
                     best_val_loss = losses['val']
                     checkpoint = {
@@ -206,7 +206,7 @@ def main():
 
             if iter_num % config['log_interval'] == 0 and master_process:
               lossf = loss.item() * config['gradient_accumulation_steps']
-              print(f"Iter {iter_num}: loss {lossf:.4f}")
+              print(f"Iter {iter_num}: loss {lossf:5.2f} | ppl {math.exp(lossf):8.2f} | bpc {lossf / math.log(2):8.3f}")
 
 
     if ddp:

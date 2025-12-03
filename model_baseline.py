@@ -2,13 +2,15 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import math
+from model import CausalSelfAttention
 
 # Define GPTBlock with MultiheadAttention
 class GPTBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = nn.MultiheadAttention(config.n_embd, config.n_head, dropout=config.dropout)
+        # self.attn = nn.MultiheadAttention(config.n_embd, config.n_head, dropout=config.dropout)
+        self.attn = CausalSelfAttention(config)
         self.drop = nn.Dropout(config.dropout)
         self.ln_2 = nn.LayerNorm(config.n_embd)
 
@@ -25,7 +27,7 @@ class GPTBlock(nn.Module):
         x_ln = self.ln_1(x)
 
         # Self-attention uses x_ln as query, key, and value
-        attn_output, _ = self.attn(x_ln, x_ln, x_ln)
+        attn_output = self.attn(x_ln)
         x = x + self.drop(attn_output)
 
         # Feedforward block with residual connection
