@@ -48,7 +48,7 @@ if __name__ == '__main__':
     model_config = GPTConfig(**model_config_kwargs)
 
     # Instantiate the model
-    if args.model_type == 'rope' or ckpt_config.get('model_type') == 'rope':
+    if args.model_type in ('rope', 'nope') or ckpt_config.get('model_type') in ('rope', 'nope'):
         model = GPTWithRoPE(model_config)
         print("Using GPTWithRoPE model.")
     else:

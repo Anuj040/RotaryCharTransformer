@@ -41,7 +41,7 @@ def main(config_file, checkpoint_path):
     gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
     gptconf = GPTConfig(**gpt_config)
 
-    if config.get('model_type') == 'rope':
+    if config.get('model_type') in ('rope', 'nope'):
         model = GPTWithRoPE(gptconf)
         print("Using GPTWithRoPE model.")
     else:

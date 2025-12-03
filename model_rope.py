@@ -29,7 +29,8 @@ class GPTWithRoPE(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            # Skip RoPE in every 4th layer if model_type is 'nope'
+            h = nn.ModuleList([Block(config, (ind + 1) % 4 != 0 if config.model_type == "nope" else True) for ind in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -49,8 +50,8 @@ class GPTWithRoPE(nn.Module):
         Return the number of parameters in the model.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            n_params -= self.transformer.wte.weight.numel()
+        # if non_embedding:
+        #     n_params -= self.transformer.wte.weight.numel()
         return n_params
 
     def _init_weights(self, module):
@@ -111,10 +112,10 @@ class GPTWithRoPE(nn.Module):
         return optimizer
 
 class Block(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_rope: bool = True) -> None:
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config)
+        self.attn = CausalSelfAttention(config, use_rope)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
 
@@ -124,7 +125,7 @@ class Block(nn.Module):
         return x
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_rope: bool = True) -> None:
         super().__init__()
         assert config.n_embd % config.n_head == 0
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
@@ -138,7 +139,9 @@ class CausalSelfAttention(nn.Module):
                                      .view(1, 1, config.block_size, config.block_size))
 
         # Precompute rotary embeddings
-        self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
+        self.rotary_emb = None
+        if use_rope:
+            self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head, freq=config.freq)
 
     def forward(self, x):
         B, T, C = x.size()
@@ -146,7 +149,8 @@ class CausalSelfAttention(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]  # Each is (B, n_head, T, head_dim)
 
         # Apply rotary embeddings to q and k
-        q, k = self.rotary_emb(q, k)  # Correcting this line
+        if self.rotary_emb is not None:
+            q, k = self.rotary_emb(q, k)  # Correcting this line
 
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
@@ -160,9 +164,9 @@ class CausalSelfAttention(nn.Module):
 
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, freq: int = 10000) -> None:
         super().__init__()
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        inv_freq = 1.0 / (freq ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
 
     def forward(self, q, k):
