@@ -94,6 +94,10 @@ def main():
     if config.get('model_type') in ['rope', 'nope']:
         model = GPTWithRoPE(gptconf)
         print("Using GPTWithRoPE model.")
+    elif config.get('model_type') == 'trm':
+        from model_rope_trm import TRMGPTWithRoPE
+        model = TRMGPTWithRoPE(gptconf)
+        print("Using TRMGPTWithRoPE model.")
     else:
         model = BaselineGPT(gptconf)
         print("Using BaselineGPT model.")

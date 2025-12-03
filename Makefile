@@ -16,7 +16,6 @@ setup-project:
 	uv sync
 	cd data/enwik8 && \
 		wget --continue http://mattmahoney.net/dc/enwik8.zip && \
-		# wget https://raw.githubusercontent.com/salesforce/awd-lstm-lm/master/data/enwik8/prep_enwik8.py && \
 		uv run prep_enwik8.py
 	uv run prepare_enwik8.py
 	@echo "Project setup completed."
