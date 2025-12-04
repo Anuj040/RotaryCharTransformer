@@ -36,8 +36,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # TRM-like flags (fallback to safe defaults if missing)
         self.share_blocks = getattr(config, "share_blocks", True)
-        self.num_recursive_steps = getattr(config, "num_recursive_steps", 6)
-        self.num_deep_recursions = getattr(config, "num_deep_recursions", 3)
+        self.num_recursive_steps = getattr(config, "num_recursive_steps", 5)
+        self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)
 
         # Main transformer container
         self.transformer = nn.ModuleDict(dict(
@@ -65,6 +65,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         self.transformer["ln_f"] = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # weight tying
+        self.lm_head.weight = self.transformer.wte.weight
 
         # --- TRM-style fixed random initial states --- #
         # register buffers like TRM's H_init / L_init
@@ -147,12 +149,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 z_H = z_H.detach()
 
         # Final step: gradients flow
-        z_H, _ = self._latent_recursion(tok_emb, z_H, z_L)
-        return z_H
+        z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L)
+        return z_H, z_L
 
     # --------------------------------------------------------------------- #
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, z_H=None, z_L=None) -> tuple[torch.Tensor]:
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -162,10 +164,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         x = self.transformer.drop(tok_emb)
         
         # init latent states z_H, z_L from fixed random buffers
-        z_H, z_L = self._init_latent_states(b, t, device, tok_emb.dtype)
+        if z_H is None or z_L is None:
+            z_H, z_L = self._init_latent_states(b, t, device, tok_emb.dtype)
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
-            x = self._deep_recursion(x, z_H, z_L)
+            z_H, z_L = self._deep_recursion(x, z_H, z_L)
+            x = z_H
         else:
             # Original stack of Blocks
             for block in self.transformer.h:
@@ -184,4 +188,4 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             logits = self.lm_head(x[:, [-1], :])
             loss = None
 
-        return logits, loss
+        return logits, loss, z_H.detach(), z_L.detach()
