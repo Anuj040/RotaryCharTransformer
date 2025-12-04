@@ -14,18 +14,17 @@ class TRMGPTWithRoPE(GPTWithRoPE):
     1. Normal (non-recursive, default):
        - config.share_blocks = False
        - self.transformer.h is a ModuleList of distinct Blocks
-       - forward() is exactly as in your original code.
+       - forward() is exactly as the original code.
 
     2. Tiny Recursive (TRM-style):
        - config.share_blocks = True
        - self.transformer.h is a *single* shared Block
-       - We define:
-
+       - forward() implements:
          latent_recursion(x): apply that Block num_recursive_steps times.
          deep_recursion(x):  run latent_recursion T-1 times under no_grad,
                              then once with grad.
 
-       This matches your pseudocode: T-1 latent reasoning passes without
+       This matches the pseudocode: T-1 latent reasoning passes without
        gradients, one pass with gradients, per forward.
     """
 
@@ -48,7 +47,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # Blocks: either single shared block (for recursion) or the original list
         if self.share_blocks:
-            # Tiny net: one Block that we will reuse recursively
+            # Tiny net: one Block used recursively
             # For simplicity we always enable RoPE here; 
             # 2 layers seem to be optimal: https://arxiv.org/pdf/2510.04871
             self.transformer["h"] = nn.ModuleList(
@@ -67,6 +66,22 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.transformer["ln_f"] = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
+        # --- TRM-style fixed random initial states --- #
+        # register buffers like TRM's H_init / L_init
+        self.register_buffer(
+            "H_init",
+            torch.empty(config.n_embd, dtype=torch.float32),
+            persistent=True,
+        )
+        self.register_buffer(
+            "L_init",
+            torch.empty(config.n_embd, dtype=torch.float32),
+            persistent=True,
+        )
+        # truncated normal-ish init
+        nn.init.trunc_normal_(self.H_init, mean=0.0, std=1.0)
+        nn.init.trunc_normal_(self.L_init, mean=0.0, std=1.0)
+
         # Initialize weights
         self.apply(self._init_weights)
         # Apply special scaled init to the residual projections, per GPT-2 paper
@@ -77,26 +92,19 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
-    def get_num_params(self, non_embedding=True):
+    def _init_latent_states(self, b: int, t: int, device: torch.device, dtype: torch.dtype):
         """
-        Return the number of parameters in the model.
+        Broadcast the fixed random H_init / L_init to [B, T, C].
+        This is analogous to TRM's reset_carry + empty_carry, but
         """
-        n_params = sum(p.numel() for p in self.parameters())
-        # if non_embedding:
-        #     n_params -= self.transformer.wte.weight.numel()
-        return n_params
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        # H_init/L_init: [C]  -> [1, 1, C] -> [B, T, C]
+        H = self.H_init.to(device=device, dtype=dtype).view(1, 1, -1).expand(b, t, -1)
+        L = self.L_init.to(device=device, dtype=dtype).view(1, 1, -1).expand(b, t, -1)
+        return H, L
 
     # -------- TRM-style pieces: latent recursion & deep recursion -------- #
 
-    def _latent_recursion(self, x: torch.Tensor) -> torch.Tensor:
+    def _latent_recursion(self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor) -> torch.Tensor:
         """
         latent recursion: apply the shared Block num_recursive_steps times.
 
@@ -105,17 +113,18 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             for i in range(n):
                 z = net(x, y, z)
             y = net(y, z)
-
-        We only have a single sequence state x here (no separate z/y),
         """
 
-        for _ in range(self.num_recursive_steps):
-            for block in self.transformer.h:
-                x = block(x)
+        for n_step in range(self.num_recursive_steps):
+            if n_step + 1 == self.num_recursive_steps:
+                for block in self.transformer.h:
+                    z_L = block(z_L + z_H + tok_emb)
+            else:
+                for block in self.transformer.h:
+                    z_H = block(z_L + z_H)
+        return z_H, z_L
 
-        return x
-
-    def _deep_recursion(self, x: torch.Tensor) -> torch.Tensor:
+    def _deep_recursion(self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor) -> torch.Tensor:
         """
         deep recursion: T-1 latent recursions in no_grad, 1 with gradients.
 
@@ -126,21 +135,20 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                     y, z = latent_recursion(...)
             # last one with grad
             y, z = latent_recursion(...)
-
-        Here we just have x as the hidden state, but we follow the same pattern.
         """
         T = max(int(self.num_deep_recursions), 1)
 
         # First T-1 steps: no gradients
         for _ in range(T - 1):
             with torch.no_grad():
-                x = self._latent_recursion(x)
+                z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L)
                 # explicitly detach to avoid any chance of graph accumulation
-                x = x.detach()
+                z_L = z_L.detach()
+                z_H = z_H.detach()
 
         # Final step: gradients flow
-        x = self._latent_recursion(x)
-        return x
+        z_H, _ = self._latent_recursion(tok_emb, z_H, z_L)
+        return z_H
 
     # --------------------------------------------------------------------- #
 
@@ -151,11 +159,13 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # Token embeddings
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
-
         x = self.transformer.drop(tok_emb)
+        
+        # init latent states z_H, z_L from fixed random buffers
+        z_H, z_L = self._init_latent_states(b, t, device, tok_emb.dtype)
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
-            x = self._deep_recursion(x)
+            x = self._deep_recursion(x, z_H, z_L)
         else:
             # Original stack of Blocks
             for block in self.transformer.h:
