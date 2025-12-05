@@ -117,13 +117,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        for n_step in range(self.num_recursive_steps):
-            if n_step + 1 == self.num_recursive_steps:
-                for block in self.transformer.h:
-                    z_L = block(z_L + z_H)
-            else:
-                for block in self.transformer.h:
-                    z_H = block(z_L + z_H + tok_emb)
+        for _ in range(self.num_recursive_steps - 1):
+            for block in self.transformer.h:
+                z_L = block(z_L + z_H + tok_emb)
+        for block in self.transformer.h:
+            z_H = block(z_L + z_H)
         return z_H, z_L
 
     def _deep_recursion(self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor) -> torch.Tensor:
