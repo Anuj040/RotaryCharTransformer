@@ -79,14 +79,15 @@ def main(config_file, checkpoint_path):
     @torch.no_grad()
     def estimate_test_loss():
         losses = []
-        for X, Y in val_loader:
-            X = X.to(device)
-            Y = Y.to(device)
-            z_H, z_L = None, None
-            for _ in range(N_supervised_steps):
-                with ctx:
-                    logits, loss, z_H, z_L = model(X, Y, z_H, z_L)
-            losses.append(loss.item())
+        with torch.autocast(device_type='cuda', dtype=torch.float16):
+            for X, Y in val_loader:
+                X = X.to(device)
+                Y = Y.to(device)
+                z_H, z_L = None, None
+                for _ in range(N_supervised_steps):
+                    with ctx:
+                        logits, loss, z_H, z_L = model(X, Y, z_H, z_L)
+                losses.append(loss.item())
         mean_loss = np.mean(losses)
         bpc = mean_loss / math.log(2)
         print(f"Test loss: {mean_loss:.4f} | test_bpc: {bpc:8.3f}")
