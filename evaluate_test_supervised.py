@@ -63,7 +63,7 @@ def main(config_file, checkpoint_path):
 
     block_size = config['block_size']
     batch_size = config.get('batch_size', 64)
-    N_supervised_steps = config.get('N_supervised_steps', 2)
+    N_supervised_steps = config.get('N_supervised_steps_eval', 2)
     num_tokens = len(test_data) - 1
     x_tokens = test_data[:num_tokens]
     y_tokens = test_data[1:num_tokens+1]
