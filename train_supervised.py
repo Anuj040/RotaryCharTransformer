@@ -1,23 +1,24 @@
 #modified train.py
 import argparse
-import os
-import time
 import math
+import os
 import pickle
+import time
 from contextlib import nullcontext
+from itertools import cycle
 
 import numpy as np
 import torch
 import torch.optim as optim
+from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 from tqdm import tqdm
-import wandb
 
+import wandb
 from model import GPTConfig
 from model_baseline import BaselineGPT
 from model_rope import GPTWithRoPE
-from itertools import cycle
+from src.utils.halting_loss import compute_trm_losses_and_halt
 
 
 def get_serializable_config(config):
@@ -196,17 +197,46 @@ def main():
         train_losses = []
         iter_num = 0
         for X, Y in train_loader:
-            z_H, z_L = None, None
+            z_H, z_L, all_z_H, all_z_L = None, None, None, None
             X, Y = X.to(device, non_blocking=True), Y.to(device, non_blocking=True)
+            B = X.shape[0]
+            active_mask = torch.ones(B, dtype=torch.bool, device=device)
             for _ in range(N_supervised_steps):
-                lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
+                if not active_mask.any():
+                    break
+                # indices of currently active sequences
+                active_idx = active_mask.nonzero(as_tuple=True)[0] 
+                # slice X/Y and z_H/z_L for active subset
+                X_active = X[active_idx]
+                Y_active = Y[active_idx]
+                if all_z_H is None and all_z_L is None:
+                    z_H_active, z_L_active = None, None
+                else:
+                    z_H_active = all_z_H[active_idx]
+                    z_L_active = all_z_L[active_idx]
+
+                lr = get_lr(iter_num) if config['decay_lr'] else config['learning_rate']
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
                 if ddp:
                     model.require_backward_grad_sync = (micro_step == config['gradient_accumulation_steps'] - 1)
                 with ctx:
-                    logits, loss, z_H, z_L = model(X, Y, z_H, z_L)
-                    loss = loss / config['gradient_accumulation_steps']
+                    logits, loss, z_H_new, z_L_new, q_halt_logits = model(X_active, Y_active, z_H_active, z_L_active)
+                    if all_z_H is None:
+                        all_z_H = torch.empty(
+                            (B, *z_H_new.shape[1:]), device=z_H_new.device, dtype=z_H_new.dtype
+                        )
+                        all_z_L = torch.empty(
+                            (B, *z_L_new.shape[1:]), device=z_L_new.device, dtype=z_L_new.dtype
+                        )            
+                    all_z_H[active_mask] = z_H_new
+                    all_z_L[active_mask] = z_L_new
+                    
+                    q_loss, halt_now_active = compute_trm_losses_and_halt(
+                            logits, Y[active_mask], q_halt_logits
+                        )
+                    loss = (loss + q_loss)/ config['gradient_accumulation_steps']
+                    active_mask[active_idx] = active_mask[active_idx] & (~halt_now_active)
                 scaler.scale(loss).backward()
 
                 if config['grad_clip'] != 0.0:

@@ -4,9 +4,9 @@
 all-format:
 	@echo "Formatting all Python files in directoy: $(DIR)"
 	FILES=$$(find $(DIR) -name "*.py" -not -path "*/venv/*" | grep -v "__init__.py"); \
-	black $$FILES; \
-	isort $$FILES; \
-	autoflake --in-place --remove-unused-variables --remove-all-unused-imports --ignore-init-module-imports $$FILES; \
+	uv run black $$FILES; \
+	uv run isort $$FILES; \
+	uv run autoflake --in-place --remove-unused-variables --remove-all-unused-imports --ignore-init-module-imports $$FILES; \
 	echo "Formatting completed."
 
 setup-project:

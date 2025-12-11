@@ -1,13 +1,15 @@
-import os
 import math
+import os
 import pickle
+from contextlib import nullcontext
+
 import numpy as np
 import torch
-from contextlib import nullcontext
 
 from model import GPTConfig
 from model_baseline import BaselineGPT
 from model_rope import GPTWithRoPE
+
 
 def get_batch(data, config, device, device_type):
     ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))

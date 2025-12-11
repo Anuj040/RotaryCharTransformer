@@ -85,6 +85,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         nn.init.trunc_normal_(self.L_init, mean=0.0, std=1.0)
         self.ln_h = nn.LayerNorm(config.n_embd)
         self.ln_l = nn.LayerNorm(config.n_embd)
+        self.q_head = nn.Linear(config.n_embd, 2, bias=True)
+        # init like TRM: bias to negative so initial halt prob is low
+        with torch.no_grad():
+            self.q_head.weight.zero_()
+            self.q_head.bias.fill_(-5.0)
+
         # Initialize weights
         self.apply(self._init_weights)
         # Apply special scaled init to the residual projections, per GPT-2 paper
@@ -173,11 +179,15 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             # TRM-like recursive tiny model with truncated BPTT
             z_H, z_L = self._deep_recursion(x, z_H, z_L)
             x = z_H
+
+            # Q-head logits per token: [B, T, 2]
+            q_halt_logits = self.q_head(z_H)
         else:
             # Original stack of Blocks
             for block in self.transformer.h:
                 x = block(x)
-        x = self.transformer.ln_f(x)
+            x = self.transformer.ln_f(x)
+            q_halt_logits = None  # no q_head in non-recursive mode
 
         if targets is not None:
             logits = self.lm_head(x)
@@ -191,4 +201,4 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             logits = self.lm_head(x[:, [-1], :])
             loss = None
 
-        return logits, loss, z_H.detach(), z_L.detach()
+        return logits, loss, z_H.detach(), z_L.detach(), q_halt_logits

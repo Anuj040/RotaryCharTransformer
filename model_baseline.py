@@ -1,8 +1,11 @@
+import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import math
+
 from model import CausalSelfAttention
+
 
 # Define GPTBlock with MultiheadAttention
 class GPTBlock(nn.Module):
