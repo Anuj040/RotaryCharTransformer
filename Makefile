@@ -19,3 +19,12 @@ setup-project:
 		uv run prep_enwik8.py
 	uv run prepare_enwik8.py
 	@echo "Project setup completed."
+
+
+setup-project-nb:
+	@echo "Setting up project environment..."
+	cd data/enwik8 && \
+		wget --continue http://mattmahoney.net/dc/enwik8.zip && \
+		python prep_enwik8.py
+	python prepare_enwik8.py
+	@echo "Project setup completed."
