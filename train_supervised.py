@@ -96,10 +96,10 @@ def main():
     val_dataset = EnwikDataset(os.path.join(data_dir, 'val.bin'), config['block_size'])
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=config['batch_size'], shuffle=True,  pin_memory=(device_type=='cuda'), num_workers=8 if device_type=='cuda' else 2
+        train_dataset, batch_size=config['batch_size'], shuffle=True,  prefetch_factor=4, pin_memory=(device_type=='cuda'), num_workers=8 if device_type=='cuda' else 2
     )
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=2 * config['batch_size'], shuffle=False,  pin_memory=(device_type=='cuda'), num_workers=8 if device_type=='cuda' else 2
+        val_dataset, batch_size=2 * config['batch_size'], shuffle=False,  prefetch_factor=8, pin_memory=(device_type=='cuda'), num_workers=8 if device_type=='cuda' else 2
     )
     train_loader = cycle(train_loader)
 
@@ -169,9 +169,9 @@ def main():
                 for ind, (X, Y) in enumerate(val_loader):
                     X, Y = X.to(device), Y.to(device)
                     z_H, z_L = None, None
-                    for _ in range(N_supervised_steps):
+                    for _ in range(config.get('N_supervised_steps_eval', 2)):
                         with ctx:
-                            logits, loss, z_H, z_L = model(X, Y, z_H, z_L)
+                            _, loss, z_H, z_L = model(X, Y, z_H, z_L)
                     losses[ind] = loss.item()
             out[split] = losses.mean()
         model.train()
