@@ -29,17 +29,20 @@ class EnwikDataset(torch.utils.data.Dataset):
         data = np.fromfile(data_path, dtype=np.uint16)
         self.data = torch.from_numpy(data.astype(np.int64))
         self.block_size = block_size
+        # self.block_size = block_size // 2
         
         # number of full non-overlapping blocks
         self.n_blocks = len(self.data) // self.block_size
 
     def __len__(self) -> int:
         return self.n_blocks - 1  # since y starts one block after x
+        # return self.n_blocks - 2  # since y starts one block after x
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         # Each idx corresponds to a full block
         start = idx * self.block_size
         end = start + self.block_size
+        # end = start + self.block_size + self.block_size
         
         x = self.data[start:end]
         y = self.data[start+1:end+1]  # still next-token prediction inside the block
@@ -160,7 +163,7 @@ def main():
                    name=config.get('wandb_run_name', None),
                    config=get_serializable_config(config))
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def estimate_loss():
         out = {}
         model.eval()       
@@ -172,7 +175,7 @@ def main():
                     z_H, z_L = None, None
                     for _ in range(config.get('N_supervised_steps_eval', 2)):
                         with ctx:
-                            _, loss, z_H, z_L = model(X, Y, z_H, z_L)
+                            _, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
                     losses[ind] = loss.item()
             out[split] = losses.mean()
         model.train()

@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from model import GPTConfig
 import inspect
+from torch.nn.attention import sdpa_kernel, SDPBackend
 
 def apply_rotary_pos_emb(q, cos, sin):
     # Apply rotary position embedding to query and key
@@ -34,6 +35,8 @@ class GPTWithRoPE(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # weight tying
+        self.lm_head.weight = self.transformer.wte.weight
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -124,6 +127,7 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, use_rope: bool = True) -> None:
         super().__init__()
@@ -135,29 +139,60 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size))
 
-        # Precompute rotary embeddings
+        # Keep this only for the manual fallback path.
+        self.register_buffer(
+            "bias",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size),
+            persistent=False,
+        )
+
         self.rotary_emb = None
         if use_rope:
             self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head, freq=config.freq)
 
+        # Optional toggle if you want to force the old path.
+        self.use_sdpa = torch.cuda.is_available() #getattr(config, "use_sdpa", True)
+
     def forward(self, x):
         B, T, C = x.size()
-        qkv = self.c_attn(x).view(B, T, 3, self.n_head, C // self.n_head).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # Each is (B, n_head, T, head_dim)
+        head_dim = C // self.n_head
 
-        # Apply rotary embeddings to q and k
+        # Project to q,k,v and reshape to (B, n_head, T, head_dim)
+        qkv = self.c_attn(x)
+        qkv = qkv.view(B, T, 3, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # RoPE on q,k
         if self.rotary_emb is not None:
-            q, k = self.rotary_emb(q, k)  # Correcting this line
+            q, k = self.rotary_emb(q, k)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-        y = att @ v
 
+        # Prefer SDPA (FlashAttention when available)
+        if self.use_sdpa and hasattr(F, "scaled_dot_product_attention"):
+            # SDPA expects dropout_p=0.0 in eval mode
+            dropout_p = self.dropout if self.training else 0.0
+            with sdpa_kernel(
+                    backends=[
+                        SDPBackend.FLASH_ATTENTION,
+                        SDPBackend.EFFICIENT_ATTENTION,
+                        SDPBackend.MATH,
+                    ]
+                ):
+                y = F.scaled_dot_product_attention(
+                    q, k, v,
+                    dropout_p=dropout_p,
+                    is_causal=True,
+                )
+        else:
+            # Manual masked softmax fallback
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))
+            att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v
+
+        # Back to (B, T, C)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return y
