@@ -13,6 +13,7 @@ import torch.optim as optim
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
+from torch import nn
 
 import wandb
 from model import GPTConfig
@@ -48,6 +49,34 @@ class EnwikDataset(torch.utils.data.Dataset):
         y = self.data[start+1:end+1]  # still next-token prediction inside the block
         
         return x, y
+
+
+@torch.inference_mode()
+def estimate_loss(model: nn.Module, val_loader: torch.utils.data.DataLoader, device, config, ctx=nullcontext()):
+    out = {}
+    model.eval()       
+    for split in ['val']:
+        losses = torch.zeros(len(val_loader))
+        with ctx:
+            for ind, (X, Y) in enumerate(val_loader):
+                X, Y = X.to(device), Y.to(device)
+                z_H, z_L = None, None
+                for _ in range(config.get('N_supervised_steps_eval', 2)):
+                    with ctx:
+                        _, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
+                losses[ind] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+
+def get_lr(it, config):
+    if it < config['warmup_iters']:
+        return config['learning_rate'] * it / config['warmup_iters']
+    if it > config['lr_decay_iters']:
+        return config['min_lr']
+    decay_ratio = (it - config['warmup_iters']) / (config['lr_decay_iters'] - config['warmup_iters'])
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return config['min_lr'] + coeff * (config['learning_rate'] - config['min_lr'])
 
 def main():
     parser = argparse.ArgumentParser()
@@ -163,32 +192,6 @@ def main():
                    name=config.get('wandb_run_name', None),
                    config=get_serializable_config(config))
 
-    @torch.inference_mode()
-    def estimate_loss():
-        out = {}
-        model.eval()       
-        for split in ['val']:
-            losses = torch.zeros(len(val_loader))
-            with ctx:
-                for ind, (X, Y) in enumerate(val_loader):
-                    X, Y = X.to(device), Y.to(device)
-                    z_H, z_L = None, None
-                    for _ in range(config.get('N_supervised_steps_eval', 2)):
-                        with ctx:
-                            _, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
-                    losses[ind] = loss.item()
-            out[split] = losses.mean()
-        model.train()
-        return out
-
-    def get_lr(it):
-        if it < config['warmup_iters']:
-            return config['learning_rate'] * it / config['warmup_iters']
-        if it > config['lr_decay_iters']:
-            return config['min_lr']
-        decay_ratio = (it - config['warmup_iters']) / (config['lr_decay_iters'] - config['warmup_iters'])
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-        return config['min_lr'] + coeff * (config['learning_rate'] - config['min_lr'])
 
     running_mfu = -1.0
     t0 = time.time()
