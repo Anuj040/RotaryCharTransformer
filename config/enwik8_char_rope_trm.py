@@ -35,8 +35,8 @@ grad_clip = 1.0
 decay_lr = True
 warmup_iters = int(0.02 * max_iters)  # 2% of max_iters
 init_from = 'scratch'  # Initialize model from scratch
-N_supervised_steps = 6
-N_supervised_steps_eval = N_supervised_steps - 2  # Use one less step during evaluation
+N_supervised_steps = 9
+N_supervised_steps_eval = N_supervised_steps - 4  # Use one less step during evaluation
 
 # Use the modified model
 model_type = 'trm'
