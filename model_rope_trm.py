@@ -51,7 +51,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             # For simplicity we always enable RoPE here; 
             # 2 layers seem to be optimal: https://arxiv.org/pdf/2510.04871
             self.transformer["h"] = nn.ModuleList(
-                [Block(config, True) for _ in range(2)]
+                [Block(config, True, cross_attn = False) for _ in range(2)]
             )
         else:
             # Original behavior: stack of distinct Blocks
@@ -120,13 +120,14 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         for _ in range(self.num_recursive_steps - 1):
             for block in self.transformer.h:
                 z_L = self.ln_l(block(self.a_L * z_L + self.a_H * z_H + self.a_X * tok_emb))
+                # z_L = block(z_L, z_L + z_H + tok_emb)
 
                 # u = self.a_L * self.n_L(z_L) + self.a_H * self.n_H(z_H) + self.a_X * self.n_X(tok_emb)
                 # delta_L = block(u)
                 # z_L = z_L + self.alpha_L * delta_L          
         for block in self.transformer.h:
             z_H = self.ln_h(block(self.b_L * z_L + self.b_H * z_H))
-
+            # z_H = block(z_H, z_L + z_H)
             # v = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)  # separate params/norms are often helpful
             # delta_H = block(v)
             # z_H = z_H + self.alpha_H * delta_H    
@@ -173,6 +174,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         if z_H is None or z_L is None:
             z_H = self.ln_h(x)
             z_L = self.ln_l(x)
+            # z_H = x
+            # z_L = x
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             z_H, z_L = self._deep_recursion(x, z_H, z_L)

@@ -5,6 +5,7 @@ from torch.nn import functional as F
 from model import GPTConfig
 import inspect
 from torch.nn.attention import sdpa_kernel, SDPBackend
+from typing import Optional
 
 def apply_rotary_pos_emb(q, cos, sin):
     # Apply rotary position embedding to query and key
@@ -115,24 +116,33 @@ class GPTWithRoPE(nn.Module):
         return optimizer
 
 class Block(nn.Module):
-    def __init__(self, config, use_rope: bool = True) -> None:
+    def __init__(self, config, use_rope: bool = True, cross_attn: bool = False) -> None:
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config, use_rope)
+        self.attn = CausalSelfAttention(config, use_rope, cross_attn = cross_attn)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
+        if cross_attn:
+            self.ln_3 = nn.LayerNorm(config.n_embd)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+
+    def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
+        x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None)
         x = x + self.mlp(self.ln_2(x))
         return x
 
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, config, use_rope: bool = True) -> None:
+    def __init__(self, config, use_rope: bool = True, cross_attn: bool = False) -> None:
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.cross_attn = cross_attn
+        if not cross_attn:
+            self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        else:
+            self.c_attn = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+            self.kv_attn = nn.Linear(config.n_embd, 2 * config.n_embd, bias=config.bias)
+
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -154,14 +164,20 @@ class CausalSelfAttention(nn.Module):
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available() #getattr(config, "use_sdpa", True)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
         B, T, C = x.size()
         head_dim = C // self.n_head
 
         # Project to q,k,v and reshape to (B, n_head, T, head_dim)
-        qkv = self.c_attn(x)
-        qkv = qkv.view(B, T, 3, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
+        if not self.cross_attn:
+            qkv = self.c_attn(x)
+            qkv = qkv.view(B, T, 3, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
+            q, k, v = qkv[0], qkv[1], qkv[2]
+        else:
+            q = self.c_attn(x).view(B, T, 1, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
+            kv = self.kv_attn(kv)
+            kv = kv.view(B, T, 2, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
+            k, v = kv[0], kv[1]
 
         # RoPE on q,k
         if self.rotary_emb is not None:
@@ -183,6 +199,7 @@ class CausalSelfAttention(nn.Module):
                     q, k, v,
                     dropout_p=dropout_p,
                     is_causal=True,
+                    scale=1.0 / math.sqrt(head_dim)
                 )
         else:
             # Manual masked softmax fallback
