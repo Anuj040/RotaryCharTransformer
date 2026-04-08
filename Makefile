@@ -9,6 +9,14 @@ all-format:
 	uv run autoflake --in-place --remove-unused-variables --remove-all-unused-imports --ignore-init-module-imports $$FILES; \
 	echo "Formatting completed."
 
+all-format-gcp:
+	@echo "Formatting all Python files in directoy: $(DIR)"
+	FILES=$$(find $(DIR) -name "*.py" -not -path "*/venv/*" | grep -v "__init__.py"); \
+	black $$FILES --target-version py312; \
+	isort $$FILES; \
+	autoflake --in-place --remove-unused-variables --remove-all-unused-imports --ignore-init-module-imports $$FILES; \
+	echo "Formatting completed."
+
 setup-project:
 	@echo "Setting up project environment..."
 	curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -20,6 +28,18 @@ setup-project:
 	uv run prepare_enwik8.py
 	@echo "Project setup completed."
 
+
+setup-project-gcp:
+	@echo "Setting up project environment..."
+	sudo apt install python3.12-venv
+	python3 -m venv .venv
+	source .venv/bin/activate
+	cd data/enwik8 && \
+		wget --continue http://mattmahoney.net/dc/enwik8.zip && \
+		python3 prep_enwik8.py
+	python3 prepare_enwik8.py
+	pip install -r requirements.txt
+	@echo "Project setup completed."
 
 setup-project-nb:
 	@echo "Setting up project environment..."

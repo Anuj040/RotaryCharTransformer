@@ -8,7 +8,6 @@ from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
-
 def apply_rotary_pos_emb(q, cos, sin):
     # Apply rotary position embedding to query and key
     q_cos = q * cos
