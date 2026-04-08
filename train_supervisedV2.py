@@ -15,11 +15,11 @@ from tqdm import tqdm
 
 from model import GPTConfig
 from model_baseline import BaselineGPT
-from model_rope import GPTWithRoPE
+from src.utils.model_utilities.model_rope import GPTWithRoPE
 from itertools import cycle
 
 
-from train_supervised import EnwikDataset, get_serializable_config, estimate_loss, get_lr
+from src.pipelines.train_supervised import EnwikDataset, get_serializable_config, estimate_loss, get_lr
 from src.utils.halting_loss import compute_trm_losses_and_halt
 
 config_file = "config/enwik8_char_rope_trm.py"
@@ -78,7 +78,7 @@ if config.get('model_type') in ['rope', 'nope']:
     model = GPTWithRoPE(gptconf)
     print("Using GPTWithRoPE model.")
 elif config.get('model_type') == 'trm':
-    from model_rope_trm import TRMGPTWithRoPE
+    from utils.model_utilities.model_rope_trm import TRMGPTWithRoPE
     model = TRMGPTWithRoPE(gptconf)
     print("Using TRMGPTWithRoPE model.")
 else:

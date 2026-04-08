@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from model import GPTConfig
 from model_baseline import BaselineGPT
-from model_rope import GPTWithRoPE
+from src.utils.model_utilities.model_rope import GPTWithRoPE
 
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
@@ -95,7 +95,7 @@ def main():
         model = GPTWithRoPE(gptconf)
         print("Using GPTWithRoPE model.")
     elif config.get('model_type') == 'trm':
-        from model_rope_trm import TRMGPTWithRoPE
+        from utils.model_utilities.model_rope_trm import TRMGPTWithRoPE
         model = TRMGPTWithRoPE(gptconf)
         print("Using TRMGPTWithRoPE model.")
     else:

@@ -1,11 +1,13 @@
+import inspect
 import math
+from typing import Optional
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from model import GPTConfig
-import inspect
-from torch.nn.attention import sdpa_kernel, SDPBackend
-from typing import Optional
+from torch.nn.attention import SDPBackend, sdpa_kernel
+
+
 
 def apply_rotary_pos_emb(q, cos, sin):
     # Apply rotary position embedding to query and key
@@ -17,9 +19,10 @@ def apply_rotary_pos_emb(q, cos, sin):
 
 def rotate_half(x):
     # Helper function to apply rotation
-    x1 = x[..., :x.shape[-1]//2]
-    x2 = x[..., x.shape[-1]//2:]
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
+
 
 class GPTWithRoPE(nn.Module):
     def __init__(self, config):
@@ -28,13 +31,23 @@ class GPTWithRoPE(nn.Module):
         assert config.block_size is not None
         self.config = config
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            drop = nn.Dropout(config.dropout),
-            # Skip RoPE in every 4th layer if model_type is 'nope'
-            h = nn.ModuleList([Block(config, (ind + 1) % 4 != 0 if config.model_type == "nope" else True) for ind in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd)
-        ))
+        self.transformer = nn.ModuleDict(
+            dict(
+                wte=nn.Embedding(config.vocab_size, config.n_embd),
+                drop=nn.Dropout(config.dropout),
+                # Skip RoPE in every 4th layer if model_type is 'nope'
+                h=nn.ModuleList(
+                    [
+                        Block(
+                            config,
+                            (ind + 1) % 4 != 0 if config.model_type == "nope" else True,
+                        )
+                        for ind in range(config.n_layer)
+                    ]
+                ),
+                ln_f=nn.LayerNorm(config.n_embd),
+            )
+        )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # weight tying
         self.lm_head.weight = self.transformer.wte.weight
@@ -43,11 +56,13 @@ class GPTWithRoPE(nn.Module):
         self.apply(self._init_weights)
         # Apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+            if pn.endswith("c_proj.weight"):
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                )
 
         # Report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+        print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     def get_num_params(self, non_embedding=True):
         """
@@ -67,9 +82,11 @@ class GPTWithRoPE(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-        device = idx.device
+        idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert (
+            t <= self.config.block_size
+        ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         # Token embeddings
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
@@ -82,10 +99,14 @@ class GPTWithRoPE(nn.Module):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
+            logits = self.lm_head(
+                x[:, [-1], :]
+            )  # note: using list [-1] to preserve the time dim
             loss = None
 
         return logits, loss
@@ -99,32 +120,38 @@ class GPTWithRoPE(nn.Module):
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": nodecay_params, "weight_decay": 0.0},
         ]
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        print(
+            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+        )
+        print(
+            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+        )
         # Create AdamW optimizer
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
+        fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=betas, **extra_args
+        )
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer
+
 
 class Block(nn.Module):
     def __init__(self, config, use_rope: bool = True, cross_attn: bool = False) -> None:
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config, use_rope, cross_attn = cross_attn)
+        self.attn = CausalSelfAttention(config, use_rope, cross_attn=cross_attn)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
         if cross_attn:
             self.ln_3 = nn.LayerNorm(config.n_embd)
-
 
     def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
         x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None)
@@ -153,16 +180,20 @@ class CausalSelfAttention(nn.Module):
         # Keep this only for the manual fallback path.
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size),
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                1, 1, config.block_size, config.block_size
+            ),
             persistent=False,
         )
 
         self.rotary_emb = None
         if use_rope:
-            self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head, freq=config.freq)
+            self.rotary_emb = RotaryEmbedding(
+                dim=config.n_embd // config.n_head, freq=config.freq
+            )
 
         # Optional toggle if you want to force the old path.
-        self.use_sdpa = torch.cuda.is_available() #getattr(config, "use_sdpa", True)
+        self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
 
     def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
         B, T, C = x.size()
@@ -174,7 +205,11 @@ class CausalSelfAttention(nn.Module):
             qkv = qkv.view(B, T, 3, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
             q, k, v = qkv[0], qkv[1], qkv[2]
         else:
-            q = self.c_attn(x).view(B, T, 1, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
+            q = (
+                self.c_attn(x)
+                .view(B, T, 1, self.n_head, head_dim)
+                .permute(2, 0, 3, 1, 4)
+            )
             kv = self.kv_attn(kv)
             kv = kv.view(B, T, 2, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
             k, v = kv[0], kv[1]
@@ -183,23 +218,24 @@ class CausalSelfAttention(nn.Module):
         if self.rotary_emb is not None:
             q, k = self.rotary_emb(q, k)
 
-
         # Prefer SDPA (FlashAttention when available)
         if self.use_sdpa and hasattr(F, "scaled_dot_product_attention"):
             # SDPA expects dropout_p=0.0 in eval mode
             dropout_p = self.dropout if self.training else 0.0
             with sdpa_kernel(
-                    backends=[
-                        SDPBackend.FLASH_ATTENTION,
-                        SDPBackend.EFFICIENT_ATTENTION,
-                        SDPBackend.MATH,
-                    ]
-                ):
+                backends=[
+                    SDPBackend.FLASH_ATTENTION,
+                    SDPBackend.EFFICIENT_ATTENTION,
+                    SDPBackend.MATH,
+                ]
+            ):
                 y = F.scaled_dot_product_attention(
-                    q, k, v,
+                    q,
+                    k,
+                    v,
                     dropout_p=dropout_p,
                     is_causal=True,
-                    scale=1.0 / math.sqrt(head_dim)
+                    scale=1.0 / math.sqrt(head_dim),
                 )
         else:
             # Manual masked softmax fallback
@@ -219,11 +255,13 @@ class RotaryEmbedding(nn.Module):
     def __init__(self, dim, freq: int = 10000) -> None:
         super().__init__()
         inv_freq = 1.0 / (freq ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer('inv_freq', inv_freq)
+        self.register_buffer("inv_freq", inv_freq)
 
     def forward(self, q, k):
         t = q.size(-2)
-        freqs = torch.einsum("i,j->ij", torch.arange(t, device=q.device).float(), self.inv_freq)
+        freqs = torch.einsum(
+            "i,j->ij", torch.arange(t, device=q.device).float(), self.inv_freq
+        )
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos()[None, None, :, :]
         sin = emb.sin()[None, None, :, :]
@@ -235,8 +273,8 @@ class RotaryEmbedding(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):

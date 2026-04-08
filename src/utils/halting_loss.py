@@ -16,7 +16,7 @@ def compute_trm_losses_and_halt(
         total_loss: scalar tensor (CE + lambda_q * BCE), averaged over active tokens
         Halt_mask: [B] bool, to be used for the *next* supervision step
     """
-    B = logits.size(0)
+    logits.size(0)
     q_halt_logits, q_correct_logits = torch.split(q_logits, 1, dim=-1)
     q_halt_logits = q_halt_logits.squeeze(-1)
     q_correct_logits = q_correct_logits.squeeze(-1)
@@ -33,7 +33,7 @@ def compute_trm_losses_and_halt(
         frac_correct = correct_counts / denom
         # seq_gt_correct = (frac_correct > correctness_threshold).float()
         # target_halt = seq_gt_correct.view(B, 1).expand_as(q_halt_logits)
-        # target_halt = frac_correct.view(B, 1).expand_as(q_halt_logits) 
+        # target_halt = frac_correct.view(B, 1).expand_as(q_halt_logits)
 
     bce_per_token = F.binary_cross_entropy_with_logits(
         q_correct_logits, token_correct.float(), reduction="none"
@@ -62,7 +62,7 @@ def compute_trm_losses_and_halt(
         # q_halt_sum = (q_halt_prob * valid_token_mask.float()).sum(dim=-1)
         q_correct_sum = (q_correct_prob * valid_token_mask.float()).sum(dim=-1)
         # q_halt_mean = q_halt_sum / denom
-        q_halt_mean = torch.sigmoid(q_halt_seq_logits)
+        torch.sigmoid(q_halt_seq_logits)
         q_correct_mean = q_correct_sum / denom
 
         # model's own correctness decision:

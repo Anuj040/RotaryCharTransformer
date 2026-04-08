@@ -1,9 +1,12 @@
 import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
 from model import GPTConfig
-from model_rope import Block, GPTWithRoPE
+from src.utils.model_utilities.model_rope import Block, GPTWithRoPE
+
 
 class TRMGPTWithRoPE(GPTWithRoPE):
     """
@@ -36,32 +39,38 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # TRM-like flags (fallback to safe defaults if missing)
         self.share_blocks = getattr(config, "share_blocks", True)
-        self.num_recursive_steps = getattr(config, "num_recursive_steps", 4) #2) #4)#5)
-        self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)#2)
+        self.num_recursive_steps = getattr(
+            config, "num_recursive_steps", 4
+        )  # 2) #4)#5)
+        self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)  # 2)
 
         # Main transformer container
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            drop = nn.Dropout(config.dropout),
-        ))
+        self.transformer = nn.ModuleDict(
+            dict(
+                wte=nn.Embedding(config.vocab_size, config.n_embd),
+                drop=nn.Dropout(config.dropout),
+            )
+        )
 
         # Blocks: either single shared block (for recursion) or the original list
         if self.share_blocks:
             # Tiny net: one Block used recursively
-            # For simplicity we always enable RoPE here; 
+            # For simplicity we always enable RoPE here;
             # 2 layers seem to be optimal: https://arxiv.org/pdf/2510.04871
             self.transformer["h"] = nn.ModuleList(
-                [Block(config, True, cross_attn = False) for _ in range(2)]
+                [Block(config, True, cross_attn=False) for _ in range(2)]
             )
         else:
             # Original behavior: stack of distinct Blocks
-            self.transformer["h"] = nn.ModuleList([
-                Block(
-                    config,
-                    (ind + 1) % 4 != 0 if config.model_type == "nope" else True
-                )
-                for ind in range(config.n_layer)
-            ])
+            self.transformer["h"] = nn.ModuleList(
+                [
+                    Block(
+                        config,
+                        (ind + 1) % 4 != 0 if config.model_type == "nope" else True,
+                    )
+                    for ind in range(config.n_layer)
+                ]
+            )
 
         self.transformer["ln_f"] = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -71,9 +80,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.ln_h = nn.LayerNorm(config.n_embd)
         self.ln_l = nn.LayerNorm(config.n_embd)
 
-        self.a_L = nn.Parameter(torch.tensor(1.0/ 3.0))
-        self.a_H = nn.Parameter(torch.tensor(1.0/ 3.0))
-        self.a_X = nn.Parameter(torch.tensor(1.0/ 3.0))
+        self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
+        self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
+        self.a_X = nn.Parameter(torch.tensor(1.0 / 3.0))
 
         # self.n_L = nn.LayerNorm(config.n_embd)
         # self.n_H = nn.LayerNorm(config.n_embd)
@@ -84,7 +93,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # self.n_L2 = nn.LayerNorm(config.n_embd)
         # self.n_H2 = nn.LayerNorm(config.n_embd)
-        
+
         # self.alpha_L = nn.Parameter(torch.tensor(0.1))  # start small
         # self.alpha_H = nn.Parameter(torch.tensor(0.1))
 
@@ -98,15 +107,19 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.apply(self._init_weights)
         # Apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+            if pn.endswith("c_proj.weight"):
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                )
 
         # Report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+        print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     # -------- TRM-style pieces: latent recursion & deep recursion -------- #
 
-    def _latent_recursion(self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor) -> torch.Tensor:
+    def _latent_recursion(
+        self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor
+    ) -> torch.Tensor:
         """
         latent recursion: apply the shared Block num_recursive_steps times.
 
@@ -119,21 +132,25 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         for _ in range(self.num_recursive_steps - 1):
             for block in self.transformer.h:
-                z_L = self.ln_l(block(self.a_L * z_L + self.a_H * z_H + self.a_X * tok_emb))
+                z_L = self.ln_l(
+                    block(self.a_L * z_L + self.a_H * z_H + self.a_X * tok_emb)
+                )
                 # z_L = block(z_L, z_L + z_H + tok_emb)
 
                 # u = self.a_L * self.n_L(z_L) + self.a_H * self.n_H(z_H) + self.a_X * self.n_X(tok_emb)
                 # delta_L = block(u)
-                # z_L = z_L + self.alpha_L * delta_L          
+                # z_L = z_L + self.alpha_L * delta_L
         for block in self.transformer.h:
             z_H = self.ln_h(block(self.b_L * z_L + self.b_H * z_H))
             # z_H = block(z_H, z_L + z_H)
             # v = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)  # separate params/norms are often helpful
             # delta_H = block(v)
-            # z_H = z_H + self.alpha_H * delta_H    
+            # z_H = z_H + self.alpha_H * delta_H
         return z_H, z_L
 
-    def _deep_recursion(self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor) -> torch.Tensor:
+    def _deep_recursion(
+        self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor
+    ) -> torch.Tensor:
         """
         deep recursion: T-1 latent recursions in no_grad, 1 with gradients.
 
@@ -162,14 +179,16 @@ class TRMGPTWithRoPE(GPTWithRoPE):
     # --------------------------------------------------------------------- #
 
     def forward(self, idx, targets=None, z_H=None, z_L=None) -> tuple[torch.Tensor]:
-        device = idx.device
+        idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert (
+            t <= self.config.block_size
+        ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         # Token embeddings
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
         x = self.transformer.drop(tok_emb)
-        
+
         # init latent states z_H, z_L from fixed random buffers
         if z_H is None or z_L is None:
             z_H = self.ln_h(x)
@@ -193,9 +212,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         if targets is not None:
             logits = self.lm_head(x)
             loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                targets.view(-1),
-                ignore_index=-1
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
         else:
             # inference: only last time step

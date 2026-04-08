@@ -5,7 +5,7 @@ import pickle
 import math
 from model import GPTConfig, GPT
 from model_baseline import BaselineGPT
-from model_rope import GPTWithRoPE
+from src.utils.model_utilities.model_rope import GPTWithRoPE
 
 def evaluate(model, data_loader, device):
     model.eval()

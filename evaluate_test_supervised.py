@@ -8,7 +8,7 @@ import torch
 
 from model import GPTConfig
 from model_baseline import BaselineGPT
-from model_rope import GPTWithRoPE
+from src.utils.model_utilities.model_rope import GPTWithRoPE
 
 
 def get_batch(data, config, device, device_type):
@@ -47,7 +47,7 @@ def main(config_file, checkpoint_path):
         model = GPTWithRoPE(gptconf)
         print("Using GPTWithRoPE model.")
     elif config.get('model_type') == 'trm':
-        from model_rope_trm import TRMGPTWithRoPE
+        from utils.model_utilities.model_rope_trm import TRMGPTWithRoPE
         model = TRMGPTWithRoPE(gptconf)
         print("Using TRMGPTWithRoPE model.")
     else:

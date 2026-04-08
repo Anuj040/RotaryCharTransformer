@@ -1,4 +1,6 @@
 import math
+import torch
+
 
 # Configuration for the modified model
 out_dir = 'out-enwik8-char-rope-trmdeep4nsup5'  # Output directory for model checkpoints and logs
@@ -42,6 +44,6 @@ N_supervised_steps_eval = N_supervised_steps - 4  # Use one less step during eva
 model_type = 'trm'
 
 # System parameters
-device = 'cuda'  # Use CUDA for training
-dtype = 'float16'  # Use float16 for faster training
+device = 'cuda'  if torch.cuda.is_available() else "cpu" # Use CUDA for training
+dtype = 'float16'  if torch.cuda.is_available() else "float32" # Use float16 for faster training
 compile = False  # Disable compilation for now
