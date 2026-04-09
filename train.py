@@ -5,7 +5,7 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
-
+import wandb
 import numpy as np
 import torch
 import torch.optim as optim
@@ -101,6 +101,8 @@ def main():
     else:
         model = BaselineGPT(gptconf)
         print("Using BaselineGPT model.")
+    if torch.cuda.is_available():
+        model = torch.compile(model)
 
     model.to(device)
 
@@ -131,11 +133,18 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Number of parameters: {total_params/1e6:.2f}M")
 
-    @torch.no_grad()
+    if master_process:
+        wandb.init(
+            project=config.get("wandb_project", "bpc"),
+            name=config.get("wandb_run_name", None),
+            config=get_serializable_config(config),
+        )
+
+    @torch.inference_mode()
     def estimate_loss():
         out = {}
         model.eval()
-        for split in ['train', 'val']:
+        for split in ['val']:
             losses = torch.zeros(config['eval_iters'])
             for k in range(config['eval_iters']):
                 X, Y = get_batch(split)
@@ -162,7 +171,8 @@ def main():
     local_iter_num = 0
     raw_model = model.module if ddp else model
 
-    with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
+    with tqdm(total=config['max_iters']) as pbar:
+        train_losses = []
         while iter_num < config['max_iters']:
             lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
             for param_group in optimizer.param_groups:
@@ -183,6 +193,7 @@ def main():
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
+            train_losses.append(loss.item() * config["gradient_accumulation_steps"])
 
             t1 = time.time()
             dt = t1 - t0
@@ -190,7 +201,16 @@ def main():
 
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
-                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f} | val_bpc {losses['val'] / math.log(2):8.3f}")
+                print(f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val']:.4f} | val_bpc {losses['val'] / math.log(2):8.3f}")
+                wandb.log(
+                    {
+                        "step": iter_num,
+                        "train_loss": np.mean(train_losses),
+                        "val_loss": losses["val"],
+                        "val_bpc": losses["val"] / math.log(2),
+                    },
+                    step=iter_num,
+                )
                 if losses['val'] < best_val_loss or config['always_save_checkpoint']:
                     best_val_loss = losses['val']
                     checkpoint = {
