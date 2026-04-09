@@ -33,12 +33,13 @@ setup-project-gcp:
 	@echo "Setting up project environment..."
 	sudo apt install python3.12-venv
 	python3 -m venv .venv
-	source .venv/bin/activate
-	cd data/enwik8 && \
+	. .venv/bin/activate && \
+		pip install -r requirements.txt  && \
+		cd data/enwik8 && \
 		wget --continue http://mattmahoney.net/dc/enwik8.zip && \
-		python3 prep_enwik8.py
-	python3 prepare_enwik8.py
-	pip install -r requirements.txt
+		python3 prep_enwik8.py && \
+		cd ../.. && \
+		python3 prepare_enwik8.py
 	@echo "Project setup completed."
 
 setup-project-nb:
