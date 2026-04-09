@@ -15,9 +15,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from tqdm import tqdm
 
 import wandb
-from model import GPTConfig
-from model_baseline import BaselineGPT
-from src.utils.model_utilities.model_rope import GPTWithRoPE
+from src.utils.model_utilities.pick_model import select_model
 
 
 def get_serializable_config(config):
@@ -165,7 +163,7 @@ def main():
         shuffle=True,
         prefetch_factor=4,
         pin_memory=(device_type == "cuda"),
-        num_workers=8 if device_type == "cuda" else 2,
+        num_workers=4 if device_type == "cuda" else 2,
     )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -173,7 +171,7 @@ def main():
         shuffle=False,
         prefetch_factor=8,
         pin_memory=(device_type == "cuda"),
-        num_workers=8 if device_type == "cuda" else 2,
+        num_workers=4 if device_type == "cuda" else 2,
     )
     train_loader = cycle(train_loader)
 
@@ -183,31 +181,7 @@ def main():
     vocab_size = meta["vocab_size"]
     config["vocab_size"] = vocab_size
 
-    gpt_config_keys = [
-        "n_layer",
-        "n_head",
-        "n_embd",
-        "block_size",
-        "bias",
-        "vocab_size",
-        "dropout",
-        "model_type",
-    ]
-    gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
-    gptconf = GPTConfig(**gpt_config)
-
-    if config.get("model_type") in ["rope", "nope"]:
-        model = GPTWithRoPE(gptconf)
-        print("Using GPTWithRoPE model.")
-    elif config.get("model_type") == "trm":
-        from src.utils.model_utilities.model_rope_trm import TRMGPTWithRoPE
-
-        model = TRMGPTWithRoPE(gptconf)
-        print("Using TRMGPTWithRoPE model.")
-    else:
-        model = BaselineGPT(gptconf)
-        print("Using BaselineGPT model.")
-
+    model = select_model(config)
     model.to(device)
 
     # Initialize optimizer outside of the model
@@ -254,7 +228,7 @@ def main():
     local_iter_num = 0
     raw_model = model.module if ddp else model
 
-    with tqdm(total=config["max_iters"], desc="Training Progress") as pbar:
+    with tqdm(total=config["max_iters"]) as pbar:
         train_losses = []
         iter_num = 0
         for X, Y in train_loader:

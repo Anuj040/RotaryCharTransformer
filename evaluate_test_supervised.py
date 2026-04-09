@@ -6,9 +6,7 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 
-from model import GPTConfig
-from model_baseline import BaselineGPT
-from src.utils.model_utilities.model_rope import GPTWithRoPE
+from src.utils.model_utilities.pick_model import select_model
 
 
 def get_batch(data, config, device, device_type):
@@ -38,21 +36,7 @@ def main(config_file, checkpoint_path):
         meta = pickle.load(f)
     vocab_size = meta['vocab_size']
     config['vocab_size'] = vocab_size
-
-    gpt_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'dropout']
-    gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
-    gptconf = GPTConfig(**gpt_config)
-
-    if config.get('model_type') in ('rope', 'nope'):
-        model = GPTWithRoPE(gptconf)
-        print("Using GPTWithRoPE model.")
-    elif config.get('model_type') == 'trm':
-        from utils.model_utilities.model_rope_trm import TRMGPTWithRoPE
-        model = TRMGPTWithRoPE(gptconf)
-        print("Using TRMGPTWithRoPE model.")
-    else:
-        model = BaselineGPT(gptconf)
-        print("Using BaselineGPT model.")
+    model = select_model(config)
     model.to(device)
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -78,22 +62,22 @@ def main(config_file, checkpoint_path):
     val_dataset = torch.utils.data.TensorDataset(x_batches, y_batches)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def estimate_test_loss():
-        losses = []
+        losses = np.zeros(N_supervised_steps)
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             for X, Y in val_loader:
                 X = X.to(device)
                 Y = Y.to(device)
                 z_H, z_L = None, None
-                for _ in range(N_supervised_steps):
+                for step in range(N_supervised_steps):
                     with ctx:
-                        logits, loss, z_H, z_L = model(X, Y, z_H, z_L)
-                losses.append(loss.item())
-        mean_loss = np.mean(losses)
+                        logits, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
+                    losses[step] += loss.item()
+        mean_loss = losses / len(val_loader)
         bpc = mean_loss / math.log(2)
-        print(f"Test loss: {mean_loss:.4f} | test_bpc: {bpc:8.3f}")
-        return mean_loss, bpc
+        for step in range(N_supervised_steps):
+            print(f"Steps {step}: {mean_loss[step]:.4f} | bpc: {bpc[step]:8.3f}")
 
     estimate_test_loss()
 
