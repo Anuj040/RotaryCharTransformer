@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from model import GPTConfig
+from src.utils.model_utilities.model import GPTConfig
 from src.utils.model_utilities.model_rope import Block, GPTWithRoPE
 
 
