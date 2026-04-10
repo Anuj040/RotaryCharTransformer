@@ -76,4 +76,5 @@ def compute_trm_losses_and_halt(
         # halt_now = (q_halt_mean > halt_threshold) & seq_model_correct
         halt_now = seq_model_correct
 
-    return lambda_q * (bce_correct_loss + bce_halt_loss), halt_now, q_correct_mean
+    # return lambda_q * (bce_correct_loss + bce_halt_loss), halt_now, q_correct_mean
+    return lambda_q * bce_correct_loss, halt_now, q_correct_mean

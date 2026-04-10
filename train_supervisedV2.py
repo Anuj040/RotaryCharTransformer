@@ -19,7 +19,8 @@ from src.utils.model_utilities.model_rope import GPTWithRoPE
 from itertools import cycle
 
 
-from src.pipelines.train_supervised import EnwikDataset, get_serializable_config, estimate_loss, get_lr
+from src.utils.data_utils.prepare_dataset import EnwikDataset
+from src.pipelines.train_supervised import get_serializable_config, estimate_loss, get_lr
 from src.utils.halting_loss import compute_trm_losses_and_halt
 
 config_file = "config/enwik8_char_rope_trm.py"

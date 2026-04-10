@@ -3,12 +3,12 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'out-enwik8-char-rope-trmdeep4nsup5'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/super8'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
 wandb_project = 'enwik8-char'
-wandb_run_name = 'gpt2-enwik8-char-rope'
+wandb_run_name = out_dir.split("/")[-1]
 
 dataset = 'enwik8'
 gradient_accumulation_steps = 1
@@ -18,7 +18,7 @@ block_size = 256 # Context length
 # Model parameters
 n_layer = 8
 n_head = 8
-n_embd = 512#256#512
+n_embd = 512
 freq = 10000  # Frequency parameter for RoPE
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
@@ -37,7 +37,7 @@ grad_clip = 1.0
 decay_lr = True
 warmup_iters = int(0.02 * max_iters)  # 2% of max_iters
 init_from = 'scratch'  # Initialize model from scratch
-N_supervised_steps = 9
+N_supervised_steps = 8
 N_supervised_steps_eval = N_supervised_steps - 4  # Use one less step during evaluation
 
 # Use the modified model

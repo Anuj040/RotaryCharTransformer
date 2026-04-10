@@ -15,7 +15,9 @@ from torch.distributed import destroy_process_group, init_process_group
 from tqdm import tqdm
 
 import wandb
+from src.utils.data_utils.prepare_dataset import EnwikDataset
 from src.utils.model_utilities.pick_model import select_model
+from src.utils.train_utils.misc import scale_hyperparams
 
 
 def get_serializable_config(config):
@@ -24,34 +26,6 @@ def get_serializable_config(config):
         for k, v in config.items()
         if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith("__")
     }
-
-
-class EnwikDataset(torch.utils.data.Dataset):
-    def __init__(self, data_path: str, block_size: int) -> None:
-        data = np.fromfile(data_path, dtype=np.uint16)
-        self.data = torch.from_numpy(data.astype(np.int64))
-        self.block_size = block_size
-        # self.block_size = block_size // 2
-
-        # number of full non-overlapping blocks
-        self.n_blocks = len(self.data) // self.block_size
-
-    def __len__(self) -> int:
-        return self.n_blocks - 1  # since y starts one block after x
-        # return self.n_blocks - 2  # since y starts one block after x
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        # Each idx corresponds to a full block
-        start = idx * self.block_size
-        end = start + self.block_size
-        # end = start + self.block_size + self.block_size
-
-        x = self.data[start:end]
-        y = self.data[
-            start + 1 : end + 1
-        ]  # still next-token prediction inside the block
-
-        return x, y
 
 
 @torch.inference_mode()
@@ -231,11 +205,19 @@ def main():
     with tqdm(total=config["max_iters"]) as pbar:
         train_losses = []
         iter_num = 0
+        scores = None
         for X, Y in train_loader:
             z_H, z_L, all_z_H, all_z_L = None, None, None, None
             X, Y = X.to(device, non_blocking=True), Y.to(device, non_blocking=True)
             B = X.shape[0]
             active_mask = torch.ones(B, dtype=torch.bool, device=device)
+            correctness_threshold = scale_hyperparams(
+                iter_num,
+                config["max_iters"],
+                config.get("correctness_threshold", 0.8),
+                scores=scores,
+                min_value=0.3,
+            )
             for _ in range(N_supervised_steps):
                 if not active_mask.any():
                     break
@@ -279,8 +261,9 @@ def main():
                     all_z_H[active_mask] = z_H_new
                     all_z_L[active_mask] = z_L_new
 
-                    # q_loss, halt_now_active = compute_trm_losses_and_halt(
-                    #         logits, Y[active_mask], q_halt_logits
+                    # q_loss, halt_now_active, scores = compute_trm_losses_and_halt(
+                    #         logits, Y_active, q_halt_logits,
+                    #         correctness_threshold=correctness_threshold,
                     #     )
                     # loss = (loss + q_loss)/ config['gradient_accumulation_steps']
                     # active_mask[active_idx] = active_mask[active_idx] & (~halt_now_active)
