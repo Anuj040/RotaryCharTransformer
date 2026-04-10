@@ -47,7 +47,10 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # Main transformer container
         self.transformer = nn.ModuleDict(
             dict(
-                wte=nn.Embedding(config.vocab_size, config.n_embd),
+                wte=nn.Embedding(
+                    config.vocab_size,
+                    config.n_embd // 4 if self.config.perlayerembeds else config.n_embd,
+                ),
                 drop=nn.Dropout(config.dropout),
             )
         )
@@ -60,6 +63,15 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             self.transformer["h"] = nn.ModuleList(
                 [Block(config, True, cross_attn=False) for _ in range(2)]
             )
+            if self.config.perlayerembeds:
+                perlayerembeds = [
+                    nn.Linear(config.n_embd // 4, config.n_embd, bias=False)
+                    for _ in range(3)
+                ]
+            else:
+                perlayerembeds = [nn.Identity() for _ in range(3)]
+            self.transformer["proj"] = nn.ModuleList(perlayerembeds)
+
         else:
             # Original behavior: stack of distinct Blocks
             self.transformer["h"] = nn.ModuleList(
@@ -73,7 +85,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             )
 
         self.transformer["ln_f"] = nn.LayerNorm(config.n_embd)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(
+            config.n_embd // 4 if self.config.perlayerembeds else config.n_embd,
+            config.vocab_size,
+            bias=False,
+        )
         # weight tying
         self.lm_head.weight = self.transformer.wte.weight
 
@@ -98,6 +114,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # self.alpha_H = nn.Parameter(torch.tensor(0.1))
 
         self.q_head = nn.Linear(config.n_embd, 2, bias=True)
+        self.down_proj = (
+            nn.Linear(config.n_embd, config.n_embd // 4, bias=False)
+            if self.config.perlayerembeds
+            else nn.Identity()
+        )
         # init like TRM: bias to negative so initial halt prob is low
         with torch.no_grad():
             self.q_head.weight.zero_()
@@ -131,9 +152,13 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         """
 
         for _ in range(self.num_recursive_steps - 1):
-            for block in self.transformer.h:
+            for ind, block in enumerate(self.transformer.h):
                 z_L = self.ln_l(
-                    block(self.a_L * z_L + self.a_H * z_H + self.a_X * tok_emb)
+                    block(
+                        self.a_L * z_L
+                        + self.a_H * z_H
+                        + self.a_X * self.transformer["proj"][ind](tok_emb)
+                    )
                 )
                 # z_L = block(z_L, z_L + z_H + tok_emb)
 
@@ -191,8 +216,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # init latent states z_H, z_L from fixed random buffers
         if z_H is None or z_L is None:
-            z_H = self.ln_h(x)
-            z_L = self.ln_l(x)
+            x_up = self.transformer["proj"][-1](x)
+            z_H = self.ln_h(x_up)
+            z_L = self.ln_l(x_up)
             # z_H = x
             # z_L = x
         if self.share_blocks:
@@ -210,7 +236,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             q_halt_logits = None  # no q_head in non-recursive mode
 
         if targets is not None:
-            logits = self.lm_head(x)
+            logits = self.lm_head(self.down_proj(x))
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )

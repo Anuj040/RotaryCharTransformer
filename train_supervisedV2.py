@@ -22,6 +22,8 @@ from itertools import cycle
 from src.utils.data_utils.prepare_dataset import EnwikDataset
 from src.pipelines.train_supervised import get_serializable_config, estimate_loss, get_lr
 from src.utils.halting_loss import compute_trm_losses_and_halt
+from src.utils.model_utilities.pick_model import select_model
+from src.utils.train_utils.misc import scale_hyperparams
 
 config_file = "config/enwik8_char_rope_trm.py"
 # config_file = "config/enwik8_char_rope_baselineV2.py"
@@ -71,21 +73,7 @@ with open(meta_path, 'rb') as f:
 vocab_size = meta['vocab_size']
 config['vocab_size'] = vocab_size
 
-gpt_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'dropout', 'model_type']
-gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
-gptconf = GPTConfig(**gpt_config)
-
-if config.get('model_type') in ['rope', 'nope']:
-    model = GPTWithRoPE(gptconf)
-    print("Using GPTWithRoPE model.")
-elif config.get('model_type') == 'trm':
-    from utils.model_utilities.model_rope_trm import TRMGPTWithRoPE
-    model = TRMGPTWithRoPE(gptconf)
-    print("Using TRMGPTWithRoPE model.")
-else:
-    model = BaselineGPT(gptconf)
-    print("Using BaselineGPT model.")
-
+model = select_model(config)
 model.to(device)
 
 # Initialize optimizer outside of the model
@@ -116,28 +104,13 @@ if config.get('init_from', 'scratch') == 'resume':
 total_params = sum(p.numel() for p in model.parameters())
 print(f"Number of parameters: {total_params/1e6:.2f}M")
 
-
-def scale_hyperparams(current_step: int, max_steps: int, hyper_param: float, scores: torch.Tensor = None, min_value: float = None) -> float:
-    if current_step >= max_steps:
-        return hyper_param
-    
-    if scores is None:
-        scaled_value = hyper_param * ((current_step + 1)/ max_steps) ** 1
-    else:
-        top_p = 0.10
-        scaled_value = torch.quantile(scores, 1.0 - top_p).item()
-
-    if min_value is not None:
-        scaled_value = max(scaled_value, min_value)
-    return scaled_value
-    
 running_mfu = -1.0
 t0 = time.time()
 
 local_iter_num = 0
 raw_model = model.module if ddp else model
 
-with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
+with tqdm(total=config['max_iters']) as pbar:
     train_losses = []
     iter_num = 0
     scores = None

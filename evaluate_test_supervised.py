@@ -38,7 +38,8 @@ def main(config_file, checkpoint_path):
     config['vocab_size'] = vocab_size
     model = select_model(config)
     model.to(device)
-
+    if checkpoint_path is None:
+        checkpoint_path = os.path.join(config['out_dir'], "ckpt.pt")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model'], strict=False)
     model.eval()
@@ -85,6 +86,6 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='Configuration file')
-    parser.add_argument('--checkpoint', type=str, required=True, help='Checkpoint file')
+    parser.add_argument('--checkpoint', type=str, required=False, help='Checkpoint file')
     args = parser.parse_args()
     main(args.config, args.checkpoint)

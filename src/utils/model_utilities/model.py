@@ -148,6 +148,7 @@ class GPTConfig:
         True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
     model_type: str = "baseline"  # 'baseline', 'rope', etc.
+    perlayerembeds: bool = False
 
 
 class GPT(nn.Module):
