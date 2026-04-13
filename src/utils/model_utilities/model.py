@@ -149,6 +149,8 @@ class GPTConfig:
     )
     model_type: str = "baseline"  # 'baseline', 'rope', etc.
     perlayerembeds: bool = False
+    num_recursive_steps: int = 4
+    num_deep_recursions: int = 2
 
 
 class GPT(nn.Module):

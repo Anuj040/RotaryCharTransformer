@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 
@@ -20,3 +22,15 @@ def scale_hyperparams(
     if min_value is not None:
         scaled_value = max(scaled_value, min_value)
     return scaled_value
+
+
+def get_lr(it: int, config) -> float:
+    if it < config["warmup_iters"]:
+        return config["learning_rate"] * it / config["warmup_iters"]
+    if it > config["lr_decay_iters"]:
+        return config["min_lr"]
+    decay_ratio = (it - config["warmup_iters"]) / (
+        config["lr_decay_iters"] - config["warmup_iters"]
+    )
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return config["min_lr"] + coeff * (config["learning_rate"] - config["min_lr"])

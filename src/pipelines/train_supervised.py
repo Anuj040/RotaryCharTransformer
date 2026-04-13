@@ -17,7 +17,7 @@ from tqdm import tqdm
 import wandb
 from src.utils.data_utils.prepare_dataset import EnwikDataset
 from src.utils.model_utilities.pick_model import select_model
-from src.utils.train_utils.misc import scale_hyperparams
+from src.utils.train_utils.misc import get_lr, scale_hyperparams
 
 
 def get_serializable_config(config):
@@ -36,33 +36,24 @@ def estimate_loss(
     config,
     ctx=nullcontext(),
 ):
-    out = {}
     model.eval()
+    N_supervision = config.get("N_supervised_steps_eval", 2)
     for split in ["val"]:
-        losses = torch.zeros(len(val_loader))
+        losses = torch.zeros((N_supervision))
         with ctx:
-            for ind, (X, Y) in enumerate(val_loader):
+            for _, (X, Y) in enumerate(val_loader):
                 X, Y = X.to(device), Y.to(device)
                 z_H, z_L = None, None
-                for _ in range(config.get("N_supervised_steps_eval", 2)):
+                for super_ind in range(N_supervision):
                     with ctx:
                         _, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
-                losses[ind] = loss.item()
-        out[split] = losses.mean()
+                    losses[super_ind] += loss.item()
+        out = {
+            f"{split}_{super_ind}": losses[super_ind].item() / len(val_loader)
+            for super_ind in range(N_supervision)
+        }
     model.train()
     return out
-
-
-def get_lr(it, config):
-    if it < config["warmup_iters"]:
-        return config["learning_rate"] * it / config["warmup_iters"]
-    if it > config["lr_decay_iters"]:
-        return config["min_lr"]
-    decay_ratio = (it - config["warmup_iters"]) / (
-        config["lr_decay_iters"] - config["warmup_iters"]
-    )
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return config["min_lr"] + coeff * (config["learning_rate"] - config["min_lr"])
 
 
 def main():
@@ -171,7 +162,7 @@ def main():
         betas=(config["beta1"], config["beta2"]),
     )
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(config["dtype"] == "float16"))
+    scaler = torch.amp.GradScaler(device_type, enabled=(config["dtype"] == "float16"))
 
     iter_num = 0
     best_val_loss = 1e9
@@ -285,20 +276,24 @@ def main():
             if (iter_num + 1) % config["eval_interval"] == 0 and master_process:
                 losses = estimate_loss(model, val_loader, device, config, ctx)
                 print(
-                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val']:.4f} | val_bpc {losses['val'] / math.log(2):8.3f}"
+                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val_0']:.4f} | val_bpc {losses['val_0'] / math.log(2):8.3f}"
                 )
-                wandb.log(
-                    {
-                        "step": iter_num,
-                        "train_loss": np.mean(train_losses),
-                        "val_loss": losses["val"],
-                        "val_bpc": losses["val"] / math.log(2),
-                    },
-                    step=iter_num,
-                )
+                val_bpc = {
+                    f"val_bpc{super_ind}": val_loss / math.log(2)
+                    for super_ind, val_loss in enumerate(losses.values())
+                }
+                wandb_logs = {
+                    "train_loss": np.mean(train_losses),
+                    "val_bpc": min(val_bpc.values()),
+                }
+                wandb_logs.update(val_bpc)
+                wandb.log(wandb_logs, step=iter_num)
                 train_losses = []
-                if losses["val"] < best_val_loss or config["always_save_checkpoint"]:
-                    best_val_loss = losses["val"]
+                if (
+                    min(val_bpc.values()) < best_val_loss
+                    or config["always_save_checkpoint"]
+                ):
+                    best_val_loss = min(val_bpc.values())
                     checkpoint = {
                         "model": raw_model.state_dict(),
                         "optimizer": optimizer.state_dict(),

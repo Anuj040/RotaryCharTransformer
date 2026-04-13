@@ -39,10 +39,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # TRM-like flags (fallback to safe defaults if missing)
         self.share_blocks = getattr(config, "share_blocks", True)
-        self.num_recursive_steps = getattr(
-            config, "num_recursive_steps", 4
-        )  # 2) #4)#5)
-        self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)  # 2)
+        self.num_recursive_steps = getattr(config, "num_recursive_steps", 4)
+        self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)
 
         # Main transformer container
         self.transformer = nn.ModuleDict(
@@ -60,16 +58,17 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             # Tiny net: one Block used recursively
             # For simplicity we always enable RoPE here;
             # 2 layers seem to be optimal: https://arxiv.org/pdf/2510.04871
+            n_layers = 2
             self.transformer["h"] = nn.ModuleList(
-                [Block(config, True, cross_attn=False) for _ in range(2)]
+                [Block(config, True, cross_attn=False) for _ in range(n_layers)]
             )
             if self.config.perlayerembeds:
                 perlayerembeds = [
                     nn.Linear(config.n_embd // 4, config.n_embd, bias=False)
-                    for _ in range(3)
+                    for _ in range(n_layers + 1)
                 ]
             else:
-                perlayerembeds = [nn.Identity() for _ in range(3)]
+                perlayerembeds = [nn.Identity() for _ in range(n_layers + 1)]
             self.transformer["proj"] = nn.ModuleList(perlayerembeds)
 
         else:
@@ -242,7 +241,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             )
         else:
             # inference: only last time step
-            logits = self.lm_head(x[:, [-1], :])
+            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
             loss = None
 
         return logits, loss, z_H.detach(), z_L.detach(), q_halt_logits
