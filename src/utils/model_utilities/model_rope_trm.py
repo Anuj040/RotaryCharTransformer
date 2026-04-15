@@ -95,22 +95,28 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.ln_h = nn.LayerNorm(config.n_embd)
         self.ln_l = nn.LayerNorm(config.n_embd)
 
+        self.h_init = nn.Parameter(torch.zeros(config.n_embd))
+
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_X = nn.Parameter(torch.tensor(1.0 / 3.0))
-
-        # self.n_L = nn.LayerNorm(config.n_embd)
-        # self.n_H = nn.LayerNorm(config.n_embd)
-        # self.n_X = nn.LayerNorm(config.n_embd)
-
         self.b_L = nn.Parameter(torch.tensor(0.5))
         self.b_H = nn.Parameter(torch.tensor(0.5))
+        # self.a_L = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
+        # self.a_H = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
+        # self.a_X = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
+        # self.b_L = nn.Parameter(torch.ones(config.n_embd) * 0.5)
+        # self.b_H = nn.Parameter(torch.ones(config.n_embd) * 0.5)
 
-        # self.n_L2 = nn.LayerNorm(config.n_embd)
-        # self.n_H2 = nn.LayerNorm(config.n_embd)
+        self.n_L = nn.LayerNorm(config.n_embd)
+        self.n_H = nn.LayerNorm(config.n_embd)
+        self.n_X = nn.LayerNorm(config.n_embd)
 
-        # self.alpha_L = nn.Parameter(torch.tensor(0.1))  # start small
-        # self.alpha_H = nn.Parameter(torch.tensor(0.1))
+        self.n_L2 = nn.LayerNorm(config.n_embd)
+        self.n_H2 = nn.LayerNorm(config.n_embd)
+
+        # final norm for readout (z_H never passes through a LN otherwise)
+        self.ln_out = nn.LayerNorm(config.n_embd)
 
         self.q_head = nn.Linear(config.n_embd, 2, bias=True)
         self.down_proj = (
@@ -152,24 +158,16 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         for _ in range(self.num_recursive_steps - 1):
             for ind, block in enumerate(self.transformer.h):
-                z_L = self.ln_l(
-                    block(
-                        self.a_L * z_L
-                        + self.a_H * z_H
-                        + self.a_X * self.transformer["proj"][ind](tok_emb)
-                    )
+                mix_L = (
+                    self.a_L * self.n_L(z_L)
+                    + self.a_H * self.n_H(z_H)
+                    + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
-                # z_L = block(z_L, z_L + z_H + tok_emb)
+                z_L = self.ln_l(block(mix_L))
 
-                # u = self.a_L * self.n_L(z_L) + self.a_H * self.n_H(z_H) + self.a_X * self.n_X(tok_emb)
-                # delta_L = block(u)
-                # z_L = z_L + self.alpha_L * delta_L
         for block in self.transformer.h:
-            z_H = self.ln_h(block(self.b_L * z_L + self.b_H * z_H))
-            # z_H = block(z_H, z_L + z_H)
-            # v = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)  # separate params/norms are often helpful
-            # delta_H = block(v)
-            # z_H = z_H + self.alpha_H * delta_H
+            mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
+            z_H = self.ln_h(block(mix_H))
         return z_H, z_L
 
     def _deep_recursion(
@@ -216,14 +214,13 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # init latent states z_H, z_L from fixed random buffers
         if z_H is None or z_L is None:
             x_up = self.transformer["proj"][-1](x)
-            z_H = self.ln_h(x_up)
-            z_L = self.ln_l(x_up)
-            # z_H = x
-            # z_L = x
+            z_L = x_up
+            z_H = self.h_init.expand_as(x_up).contiguous()
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             z_H, z_L = self._deep_recursion(x, z_H, z_L)
-            x = z_H
+            # x = z_H
+            x = self.ln_out(z_H)
 
             # Q-head logits per token: [B, T, 2]
             q_halt_logits = self.q_head(z_H)

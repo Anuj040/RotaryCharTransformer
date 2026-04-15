@@ -258,16 +258,14 @@ def main():
                     #     )
                     # loss = (loss + q_loss)/ config['gradient_accumulation_steps']
                     # active_mask[active_idx] = active_mask[active_idx] & (~halt_now_active)
-                scaler.scale(loss).backward()
+                scaler.scale(loss / N_supervised_steps).backward()
 
-                if config["grad_clip"] != 0.0:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), config["grad_clip"]
-                    )
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad(set_to_none=True)
+            if config["grad_clip"] != 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config["grad_clip"])
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
             train_losses.append(loss.item() * config["gradient_accumulation_steps"])
             t1 = time.time()
             t1 - t0

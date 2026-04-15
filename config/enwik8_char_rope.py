@@ -1,4 +1,3 @@
-import math
 import torch
 
 # Configuration for the modified model
@@ -46,4 +45,3 @@ model_type = 'rope'
 # System parameters
 device = 'cuda'  if torch.cuda.is_available() else "cpu" # Use CUDA for training
 dtype = 'float16'  if torch.cuda.is_available() else "float32" # Use float16 for faster training
-compile = False  # Disable compilation for now
