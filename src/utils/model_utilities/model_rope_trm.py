@@ -41,7 +41,18 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.share_blocks = getattr(config, "share_blocks", True)
         self.num_recursive_steps = getattr(config, "num_recursive_steps", 4)
         self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)
+        if not self.share_blocks:
+            return
 
+        # 2 layers seem to be optimal: https://arxiv.org/pdf/2510.04871
+        n_layers = 2
+        if self.config.perlayerembeds:
+            perlayerembeds = [
+                nn.Linear(config.n_embd // 4, config.n_embd, bias=False)
+                for _ in range(n_layers + 1)
+            ]
+        else:
+            perlayerembeds = [nn.Identity() for _ in range(n_layers + 1)]
         # Main transformer container
         self.transformer = nn.ModuleDict(
             dict(
@@ -50,40 +61,17 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                     config.n_embd // 4 if self.config.perlayerembeds else config.n_embd,
                 ),
                 drop=nn.Dropout(config.dropout),
+                proj=nn.ModuleList(perlayerembeds),
+                ln_f=nn.LayerNorm(config.n_embd),
             )
         )
 
-        # Blocks: either single shared block (for recursion) or the original list
-        if self.share_blocks:
-            # Tiny net: one Block used recursively
-            # For simplicity we always enable RoPE here;
-            # 2 layers seem to be optimal: https://arxiv.org/pdf/2510.04871
-            n_layers = 2
-            self.transformer["h"] = nn.ModuleList(
-                [Block(config, True, cross_attn=False) for _ in range(n_layers)]
-            )
-            if self.config.perlayerembeds:
-                perlayerembeds = [
-                    nn.Linear(config.n_embd // 4, config.n_embd, bias=False)
-                    for _ in range(n_layers + 1)
-                ]
-            else:
-                perlayerembeds = [nn.Identity() for _ in range(n_layers + 1)]
-            self.transformer["proj"] = nn.ModuleList(perlayerembeds)
+        # Tiny net: one Block used recursively
+        # For simplicity we always enable RoPE here;
+        self.transformer["h"] = nn.ModuleList(
+            [Block(config, True, cross_attn=False) for _ in range(n_layers)]
+        )
 
-        else:
-            # Original behavior: stack of distinct Blocks
-            self.transformer["h"] = nn.ModuleList(
-                [
-                    Block(
-                        config,
-                        (ind + 1) % 4 != 0 if config.model_type == "nope" else True,
-                    )
-                    for ind in range(config.n_layer)
-                ]
-            )
-
-        self.transformer["ln_f"] = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(
             config.n_embd // 4 if self.config.perlayerembeds else config.n_embd,
             config.vocab_size,
@@ -114,9 +102,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         self.n_L2 = nn.LayerNorm(config.n_embd)
         self.n_H2 = nn.LayerNorm(config.n_embd)
-
-        # final norm for readout (z_H never passes through a LN otherwise)
-        self.ln_out = nn.LayerNorm(config.n_embd)
 
         self.q_head = nn.Linear(config.n_embd, 2, bias=True)
         self.down_proj = (
@@ -201,6 +186,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
     # --------------------------------------------------------------------- #
 
     def forward(self, idx, targets=None, z_H=None, z_L=None) -> tuple[torch.Tensor]:
+        if not self.share_blocks:
+            return super().forward(idx, targets)
+
         idx.device
         b, t = idx.size()
         assert (
@@ -219,8 +207,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             z_H, z_L = self._deep_recursion(x, z_H, z_L)
-            # x = z_H
-            x = self.ln_out(z_H)
+            x = z_H
 
             # Q-head logits per token: [B, T, 2]
             q_halt_logits = self.q_head(z_H)
@@ -228,8 +215,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             # Original stack of Blocks
             for block in self.transformer.h:
                 x = block(x)
-            x = self.transformer.ln_f(x)
             q_halt_logits = None  # no q_head in non-recursive mode
+        x = self.transformer.ln_f(x)
 
         if targets is not None:
             logits = self.lm_head(self.down_proj(x))

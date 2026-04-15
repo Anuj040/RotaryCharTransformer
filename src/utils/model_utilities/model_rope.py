@@ -29,7 +29,14 @@ class GPTWithRoPE(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
-
+        n_layers = config.n_layer
+        if self.config.perlayerembeds:
+            perlayerembeds = [
+                nn.Linear(config.n_embd // 4, config.n_embd, bias=False)
+                for _ in range(n_layers)
+            ]
+        else:
+            perlayerembeds = [nn.Identity() for _ in range(n_layers)]
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
@@ -41,24 +48,32 @@ class GPTWithRoPE(nn.Module):
                             config,
                             (ind + 1) % 4 != 0 if config.model_type == "nope" else True,
                         )
-                        for ind in range(config.n_layer)
+                        for ind in range(n_layers)
                     ]
                 ),
+                proj=nn.ModuleList(perlayerembeds),
                 ln_f=nn.LayerNorm(config.n_embd),
             )
         )
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(
+            config.n_embd // 4 if self.config.perlayerembeds else config.n_embd,
+            config.vocab_size,
+            bias=False,
+        )
         # weight tying
         self.lm_head.weight = self.transformer.wte.weight
+        self.down_proj = (
+            nn.Linear(config.n_embd, config.n_embd // 4, bias=False)
+            if self.config.perlayerembeds
+            else nn.Identity()
+        )
 
         # Initialize weights
         self.apply(self._init_weights)
         # Apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith("c_proj.weight"):
-                torch.nn.init.normal_(
-                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
-                )
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -91,21 +106,19 @@ class GPTWithRoPE(nn.Module):
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
 
         x = self.transformer.drop(tok_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        for ind, block in enumerate(self.transformer.h):
+            x = block(self.transformer["proj"][ind](x))
         x = self.transformer.ln_f(x)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
+            logits = self.lm_head(self.down_proj(x))
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(
-                x[:, [-1], :]
-            )  # note: using list [-1] to preserve the time dim
+            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
             loss = None
 
         return logits, loss
@@ -243,6 +256,9 @@ class CausalSelfAttention(nn.Module):
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v
+        # XSA Mode: https://www.youtube.com/watch?v=2eZKT4H9_iQ
+        vn = torch.nn.functional.normalize(v, dim=-1)
+        y = y - (y * vn).sum(dim=-1, keepdim=True) * vn
 
         # Back to (B, T, C)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
