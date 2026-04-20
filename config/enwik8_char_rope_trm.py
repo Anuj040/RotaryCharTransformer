@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/super7_2deep_2lyr'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/sup3_2deep_2lyrxsainitperlyr_accum'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -26,7 +26,7 @@ num_recursive_steps = 4
 num_deep_recursions = 2
 
 # Optimization parameters
-max_iters = 4000#2500  # Number of iterations for training
+max_iters = 8000#2500  # Number of iterations for training
 learning_rate = 1e-3 * (5000 / max_iters) # Scaled learning rate
 lr_decay_iters = max_iters
 eval_interval = max_iters // 5
@@ -39,7 +39,7 @@ grad_clip = 1.0
 decay_lr = True
 warmup_iters = int(0.02 * max_iters)  # 2% of max_iters
 init_from = 'scratch'  # Initialize model from scratch
-N_supervised_steps = 7
+N_supervised_steps = 3
 N_supervised_steps_eval = max(N_supervised_steps - 5, 3)  # Use one less step during evaluation
 
 # Use the modified model

@@ -120,7 +120,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         for pn, p in self.named_parameters():
             if pn.endswith("c_proj.weight"):
                 torch.nn.init.normal_(
-                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers)
                 )
 
         # Report number of parameters
