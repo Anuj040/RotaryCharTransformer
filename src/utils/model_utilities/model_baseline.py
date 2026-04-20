@@ -1,14 +1,17 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import math
+
+from .model import CausalSelfAttention
+
 
 # Define GPTBlock with MultiheadAttention
 class GPTBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = nn.MultiheadAttention(config.n_embd, config.n_head, dropout=config.dropout)
+        # self.attn = nn.MultiheadAttention(config.n_embd, config.n_head, dropout=config.dropout)
+        self.attn = CausalSelfAttention(config)
         self.drop = nn.Dropout(config.dropout)
         self.ln_2 = nn.LayerNorm(config.n_embd)
 
@@ -25,13 +28,14 @@ class GPTBlock(nn.Module):
         x_ln = self.ln_1(x)
 
         # Self-attention uses x_ln as query, key, and value
-        attn_output, _ = self.attn(x_ln, x_ln, x_ln)
+        attn_output = self.attn(x_ln)
         x = x + self.drop(attn_output)
 
         # Feedforward block with residual connection
         x = x + self.drop(self.mlp(self.ln_2(x)))
 
         return x
+
 
 # Define the main BaselineGPT model
 class BaselineGPT(nn.Module):
@@ -41,13 +45,21 @@ class BaselineGPT(nn.Module):
         self.config = config
 
         # Transformer components
-        self.transformer = nn.ModuleDict({
-            'wte': nn.Embedding(config.vocab_size, config.n_embd),    # Token embedding
-            'wpe': nn.Embedding(config.block_size, config.n_embd),    # Positional embedding
-            'drop': nn.Dropout(config.dropout),                       # Dropout
-            'h': nn.ModuleList([GPTBlock(config) for _ in range(config.n_layer)]),  # Stack of GPT blocks
-            'ln_f': nn.LayerNorm(config.n_embd),                      # Final layer normalization
-        })
+        self.transformer = nn.ModuleDict(
+            {
+                "wte": nn.Embedding(
+                    config.vocab_size, config.n_embd
+                ),  # Token embedding
+                "wpe": nn.Embedding(
+                    config.block_size, config.n_embd
+                ),  # Positional embedding
+                "drop": nn.Dropout(config.dropout),  # Dropout
+                "h": nn.ModuleList(
+                    [GPTBlock(config) for _ in range(config.n_layer)]
+                ),  # Stack of GPT blocks
+                "ln_f": nn.LayerNorm(config.n_embd),  # Final layer normalization
+            }
+        )
 
         # Language modeling head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -69,25 +81,27 @@ class BaselineGPT(nn.Module):
 
         # Generate position indices and compute token and positional embeddings
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # (1, t)
-        tok_emb = self.transformer['wte'](idx)  # (b, t, n_embd)
-        pos_emb = self.transformer['wpe'](pos)  # (1, t, n_embd)
+        tok_emb = self.transformer["wte"](idx)  # (b, t, n_embd)
+        pos_emb = self.transformer["wpe"](pos)  # (1, t, n_embd)
 
         # Combine token and positional embeddings, then apply dropout
-        x = self.transformer['drop'](tok_emb + pos_emb)
+        x = self.transformer["drop"](tok_emb + pos_emb)
 
         # Pass through the stack of GPT blocks
-        for block in self.transformer['h']:
+        for block in self.transformer["h"]:
             x = block(x)
 
         # Final layer normalization
-        x = self.transformer['ln_f'](x)
+        x = self.transformer["ln_f"](x)
 
         # Compute logits for language modeling
         logits = self.lm_head(x)
 
         # If targets are provided, compute loss
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
             return logits, loss
 
         # Return logits if no targets are provided

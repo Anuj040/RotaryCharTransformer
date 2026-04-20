@@ -1,0 +1,7 @@
+wandb
+numpy==2.4.4
+torch==2.7.1
+tqdm
+isort
+autoflake
+black
