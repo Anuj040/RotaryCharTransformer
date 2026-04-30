@@ -78,8 +78,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             config.vocab_size,
             bias=False,
         )
-        # weight tying
-        self.lm_head.weight = self.transformer.wte.weight
 
         self.ln_h = nn.LayerNorm(config.n_embd)
         self.ln_l = nn.LayerNorm(config.n_embd)
@@ -121,6 +119,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         for pn, p in self.named_parameters():
             if pn.endswith("c_proj.weight"):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+        # Untied lm_head with tight init (modded-nanoGPT style)
+        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
