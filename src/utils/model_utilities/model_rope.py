@@ -52,7 +52,7 @@ class GPTWithRoPE(nn.Module):
                     ]
                 ),
                 proj=nn.ModuleList(perlayerembeds),
-                ln_f=nn.LayerNorm(config.n_embd),
+                ln_f=nn.RMSNorm(config.n_embd),
             )
         )
         self.lm_head = nn.Linear(
@@ -158,12 +158,12 @@ class GPTWithRoPE(nn.Module):
 class Block(nn.Module):
     def __init__(self, config, use_rope: bool = True, cross_attn: bool = False) -> None:
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.ln_1 = nn.RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config, use_rope, cross_attn=cross_attn)
-        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.ln_2 = nn.RMSNorm(config.n_embd)
         self.mlp = MLP(config)
         if cross_attn:
-            self.ln_3 = nn.LayerNorm(config.n_embd)
+            self.ln_3 = nn.RMSNorm(config.n_embd)
 
     def forward(
         self,
@@ -209,8 +209,6 @@ class CausalSelfAttention(nn.Module):
                 dim=config.n_embd // config.n_head, freq=config.freq
             )
 
-        self.ve_gate = nn.Linear(32, self.n_head, bias=True)
-
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
 
@@ -239,10 +237,7 @@ class CausalSelfAttention(nn.Module):
             k, v = kv[0], kv[1]
 
         if ve is not None:
-            ve_h = ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
-            gate = 2.0 * torch.sigmoid(self.ve_gate(x[..., :32]))
-            gate = gate.permute(0, 2, 1).unsqueeze(-1)
-            v = v + gate * ve_h
+            v = v + ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
 
         # RoPE on q,k
         if self.rotary_emb is not None:

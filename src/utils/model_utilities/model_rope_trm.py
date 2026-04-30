@@ -63,7 +63,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 ),
                 drop=nn.Dropout(config.dropout),
                 proj=nn.ModuleList(perlayerembeds),
-                ln_f=nn.LayerNorm(config.n_embd),
+                ln_f=nn.RMSNorm(config.n_embd),
             )
         )
 
@@ -79,8 +79,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             bias=False,
         )
 
-        self.ln_h = nn.LayerNorm(config.n_embd)
-        self.ln_l = nn.LayerNorm(config.n_embd)
+        self.ln_h = nn.RMSNorm(config.n_embd)
+        self.ln_l = nn.RMSNorm(config.n_embd)
 
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
@@ -96,12 +96,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # self.b_L = nn.Parameter(torch.ones(config.n_embd) * 0.5)
         # self.b_H = nn.Parameter(torch.ones(config.n_embd) * 0.5)
 
-        self.n_L = nn.LayerNorm(config.n_embd)
-        self.n_H = nn.LayerNorm(config.n_embd)
-        self.n_X = nn.LayerNorm(config.n_embd)
+        self.n_L = nn.RMSNorm(config.n_embd)
+        self.n_H = nn.RMSNorm(config.n_embd)
+        self.n_X = nn.RMSNorm(config.n_embd)
 
-        self.n_L2 = nn.LayerNorm(config.n_embd)
-        self.n_H2 = nn.LayerNorm(config.n_embd)
+        self.n_L2 = nn.RMSNorm(config.n_embd)
+        self.n_H2 = nn.RMSNorm(config.n_embd)
 
         self.q_head = nn.Linear(config.n_embd, 2, bias=True)
         self.down_proj = (
