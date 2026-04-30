@@ -220,10 +220,12 @@ def main():
                     else config["learning_rate"]
                 )
                 muon_lr = lr * (muon_peak_lr / adamw_peak_lr)
+                muon_mom = Muon.momentum_schedule(iter_num)
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
                 for param_group in muon.param_groups:
                     param_group["lr"] = muon_lr
+                    param_group["momentum"] = muon_mom
                 if ddp:
                     model.require_backward_grad_sync = (
                         micro_step == config["gradient_accumulation_steps"] - 1

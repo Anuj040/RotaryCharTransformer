@@ -25,6 +25,11 @@ class Muon(Optimizer):
         defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, ns_steps=ns_steps)
         super().__init__(params, defaults)
 
+    @staticmethod
+    def momentum_schedule(step: int, warmup_steps: int = 300, start: float = 0.85, end: float = 0.95) -> float:
+        frac = min(step / max(1, warmup_steps), 1.0)
+        return (1 - frac) * start + frac * end
+
     @torch.no_grad()
     def step(self, closure=None):
         for group in self.param_groups:
