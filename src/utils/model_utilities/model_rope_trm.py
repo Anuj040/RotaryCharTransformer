@@ -83,6 +83,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.ln_l = nn.LayerNorm(config.n_embd)
 
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
+        self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
@@ -128,7 +129,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
     # -------- TRM-style pieces: latent recursion & deep recursion -------- #
 
     def _latent_recursion(
-        self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor
+        self,
+        tok_emb: torch.Tensor,
+        z_H: torch.Tensor,
+        z_L: torch.Tensor,
+        ve: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         latent recursion: apply the shared Block num_recursive_steps times.
@@ -147,15 +152,19 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
-                z_L = self.ln_l(block(mix_L))
+                z_L = self.ln_l(block(mix_L, ve=ve))
 
         for block in self.transformer.h:
             mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
-            z_H = self.ln_h(block(mix_H))
+            z_H = self.ln_h(block(mix_H, ve=ve))
         return z_H, z_L
 
     def _deep_recursion(
-        self, tok_emb: torch.Tensor, z_H: torch.Tensor, z_L: torch.Tensor
+        self,
+        tok_emb: torch.Tensor,
+        z_H: torch.Tensor,
+        z_L: torch.Tensor,
+        ve: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         deep recursion: T-1 latent recursions in no_grad, 1 with gradients.
@@ -173,13 +182,10 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # First T-1 steps: no gradients
         for _ in range(T - 1):
             with torch.no_grad():
-                z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L)
-
-        # for _ in range(T - 1):
-        #     z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L)
+                z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L, ve=ve)
 
         # Final step: gradients flow
-        z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L)
+        z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L, ve=ve)
         return z_H, z_L
 
     # --------------------------------------------------------------------- #
@@ -205,7 +211,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             z_H = self.h_init.expand_as(x_up).contiguous()
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
-            z_H, z_L = self._deep_recursion(x, z_H, z_L)
+            ve = self.value_emb(idx)
+            z_H, z_L = self._deep_recursion(x, z_H, z_L, ve=ve)
             x = z_H
 
             # Q-head logits per token: [B, T, 2]

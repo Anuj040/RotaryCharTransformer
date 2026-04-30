@@ -165,8 +165,13 @@ class Block(nn.Module):
         if cross_attn:
             self.ln_3 = nn.LayerNorm(config.n_embd)
 
-    def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
-        x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None)
+    def forward(
+        self,
+        x: torch.Tensor,
+        kv: Optional[torch.Tensor] = None,
+        ve: Optional[torch.Tensor] = None,
+    ):
+        x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None, ve=ve)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -207,7 +212,12 @@ class CausalSelfAttention(nn.Module):
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
 
-    def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        kv: Optional[torch.Tensor] = None,
+        ve: Optional[torch.Tensor] = None,
+    ):
         B, T, C = x.size()
         head_dim = C // self.n_head
 
@@ -225,6 +235,9 @@ class CausalSelfAttention(nn.Module):
             kv = self.kv_attn(kv)
             kv = kv.view(B, T, 2, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
             k, v = kv[0], kv[1]
+
+        if ve is not None:
+            v = v + ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
 
         # RoPE on q,k
         if self.rotary_emb is not None:
