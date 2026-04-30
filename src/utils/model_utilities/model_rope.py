@@ -203,10 +203,14 @@ class CausalSelfAttention(nn.Module):
             persistent=False,
         )
 
+        head_dim = config.n_embd // config.n_head
+        self.q_norm = nn.RMSNorm(head_dim)
+        self.k_norm = nn.RMSNorm(head_dim)
+
         self.rotary_emb = None
         if use_rope:
             self.rotary_emb = RotaryEmbedding(
-                dim=config.n_embd // config.n_head, freq=config.freq
+                dim=head_dim, freq=config.freq
             )
 
         # Optional toggle if you want to force the old path.
@@ -238,6 +242,9 @@ class CausalSelfAttention(nn.Module):
 
         if ve is not None:
             v = v + ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
+
+        q = self.q_norm(q)
+        k = self.k_norm(k)
 
         # RoPE on q,k
         if self.rotary_emb is not None:
