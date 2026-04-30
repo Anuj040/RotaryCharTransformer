@@ -209,6 +209,8 @@ class CausalSelfAttention(nn.Module):
                 dim=config.n_embd // config.n_head, freq=config.freq
             )
 
+        self.ve_gate = nn.Linear(32, self.n_head, bias=True)
+
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
 
@@ -237,7 +239,10 @@ class CausalSelfAttention(nn.Module):
             k, v = kv[0], kv[1]
 
         if ve is not None:
-            v = v + ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
+            ve_h = ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
+            gate = 2.0 * torch.sigmoid(self.ve_gate(x[..., :32]))
+            gate = gate.permute(0, 2, 1).unsqueeze(-1)
+            v = v + gate * ve_h
 
         # RoPE on q,k
         if self.rotary_emb is not None:
