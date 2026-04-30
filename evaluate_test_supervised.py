@@ -1,4 +1,3 @@
-import math
 import os
 import pickle
 from contextlib import nullcontext
@@ -8,6 +7,7 @@ import torch
 
 from src.utils.model_utilities.pick_model import select_model
 
+from src.utils.eval_utils.loss_fn import estimate_test_loss
 
 def get_batch(data, config, device, device_type):
     ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
@@ -63,24 +63,7 @@ def main(config_file, checkpoint_path):
     val_dataset = torch.utils.data.TensorDataset(x_batches, y_batches)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    @torch.inference_mode()
-    def estimate_test_loss():
-        losses = np.zeros(N_supervised_steps)
-        with torch.autocast(device_type='cuda', dtype=torch.float16):
-            for X, Y in val_loader:
-                X = X.to(device)
-                Y = Y.to(device)
-                z_H, z_L = None, None
-                for step in range(N_supervised_steps):
-                    with ctx:
-                        logits, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
-                    losses[step] += loss.item()
-        mean_loss = losses / len(val_loader)
-        bpc = mean_loss / math.log(2)
-        for step in range(N_supervised_steps):
-            print(f"Steps {step}: {mean_loss[step]:.4f} | bpc: {bpc[step]:8.3f}")
-
-    estimate_test_loss()
+    estimate_test_loss(model,  val_loader, N_supervised_steps, device, ctx)
 
 if __name__ == '__main__':
     import argparse

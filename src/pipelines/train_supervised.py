@@ -10,12 +10,12 @@ from itertools import cycle
 import numpy as np
 import torch
 import torch.optim as optim
-from torch import nn
 from torch.distributed import destroy_process_group, init_process_group
 from tqdm import tqdm
 
 import wandb
 from src.utils.data_utils.prepare_dataset import EnwikDataset
+from src.utils.eval_utils.loss_fn import estimate_loss
 from src.utils.model_utilities.pick_model import select_model
 from src.utils.train_utils.misc import get_lr, scale_hyperparams
 
@@ -26,34 +26,6 @@ def get_serializable_config(config):
         for k, v in config.items()
         if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith("__")
     }
-
-
-@torch.inference_mode()
-def estimate_loss(
-    model: nn.Module,
-    val_loader: torch.utils.data.DataLoader,
-    device,
-    config,
-    ctx=nullcontext(),
-):
-    model.eval()
-    N_supervision = config.get("N_supervised_steps_eval", 2)
-    for split in ["val"]:
-        losses = torch.zeros((N_supervision))
-        with ctx:
-            for _, (X, Y) in enumerate(val_loader):
-                X, Y = X.to(device), Y.to(device)
-                z_H, z_L = None, None
-                for super_ind in range(N_supervision):
-                    with ctx:
-                        _, loss, z_H, z_L, _ = model(X, Y, z_H, z_L)
-                    losses[super_ind] += loss.item()
-        out = {
-            f"{split}_{super_ind}": losses[super_ind].item() / len(val_loader)
-            for super_ind in range(N_supervision)
-        }
-    model.train()
-    return out
 
 
 def main():
@@ -303,6 +275,8 @@ def main():
                     torch.save(checkpoint, checkpoint_path)
                     print(f"Saved checkpoint to {checkpoint_path}")
 
+                ## Single Epoch run for Autoresearch
+                break
             iter_num += 1
             local_iter_num += 1
             pbar.update(1)
