@@ -219,12 +219,14 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         if targets is not None:
             logits = self.lm_head(self.down_proj(x))
+            logits = 15.0 * torch.tanh(logits / 15.0)
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
         else:
             # inference: only last time step
             logits = self.lm_head(self.down_proj(x[:, [-1], :]))
+            logits = 15.0 * torch.tanh(logits / 15.0)
             loss = None
 
         return logits, loss, z_H.detach(), z_L.detach(), q_halt_logits
