@@ -33,6 +33,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
     def __init__(self, config: GPTConfig):
         config.dropout = 0.0
+        config.freq = 1024
         super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
