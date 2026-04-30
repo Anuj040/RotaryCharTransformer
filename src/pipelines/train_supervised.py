@@ -121,13 +121,24 @@ def main():
     model = select_model(config)
     model.to(device)
 
-    decay_params = [p for p in model.parameters() if p.dim() >= 2]
-    no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+    emb_params = []
+    matrix_params = []
+    nodecay_params = []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.dim() < 2:
+            nodecay_params.append(p)
+        elif name.endswith("wte.weight") or name.endswith("value_emb.weight"):
+            emb_params.append(p)
+        else:
+            matrix_params.append(p)
 
     optimizer = optim.AdamW(
         [
-            {"params": decay_params, "weight_decay": config["weight_decay"]},
-            {"params": no_decay_params, "weight_decay": 0.0},
+            {"params": emb_params, "weight_decay": config["weight_decay"], "lr_scale": 3.0},
+            {"params": matrix_params, "weight_decay": config["weight_decay"], "lr_scale": 1.0},
+            {"params": nodecay_params, "weight_decay": 0.0, "lr_scale": 1.0},
         ],
         lr=config["learning_rate"],
         betas=(config["beta1"], config["beta2"]),
@@ -200,7 +211,7 @@ def main():
                     else config["learning_rate"]
                 )
                 for param_group in optimizer.param_groups:
-                    param_group["lr"] = lr
+                    param_group["lr"] = lr * param_group.get("lr_scale", 1.0)
                 if ddp:
                     model.require_backward_grad_sync = (
                         micro_step == config["gradient_accumulation_steps"] - 1
