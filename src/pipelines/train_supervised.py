@@ -18,6 +18,7 @@ from src.utils.data_utils.prepare_dataset import EnwikDataset
 from src.utils.eval_utils.loss_fn import estimate_loss
 from src.utils.model_utilities.pick_model import select_model
 from src.utils.train_utils.misc import get_lr, scale_hyperparams
+from src.utils.train_utils.muon import Muon
 
 
 def get_serializable_config(config):
@@ -121,18 +122,36 @@ def main():
     model = select_model(config)
     model.to(device)
 
-    # Initialize optimizer outside of the model
-    decay_params = [p for p in model.parameters() if p.dim() >= 2]
-    no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+    # Optimizer: Muon for shared-block matrix params, AdamW for embeddings + scalars.
+    matrix_params = []
+    embed_params = []
+    nodecay_params = []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.dim() < 2:
+            nodecay_params.append(p)
+        elif n.endswith("wte.weight") or n == "lm_head.weight":
+            embed_params.append(p)
+        else:
+            matrix_params.append(p)
 
     optimizer = optim.AdamW(
         [
-            {"params": decay_params, "weight_decay": config["weight_decay"]},
-            {"params": no_decay_params, "weight_decay": 0.0},
+            {"params": embed_params, "weight_decay": config["weight_decay"]},
+            {"params": nodecay_params, "weight_decay": 0.0},
         ],
         lr=config["learning_rate"],
         betas=(config["beta1"], config["beta2"]),
     )
+    muon = Muon(
+        matrix_params,
+        lr=0.02,
+        momentum=0.95,
+        weight_decay=config["weight_decay"],
+    )
+    muon_peak_lr = 0.02
+    adamw_peak_lr = config["learning_rate"]
 
     scaler = torch.amp.GradScaler(device_type, enabled=(config["dtype"] == "float16"))
 
@@ -200,8 +219,11 @@ def main():
                     if config["decay_lr"]
                     else config["learning_rate"]
                 )
+                muon_lr = lr * (muon_peak_lr / adamw_peak_lr)
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
+                for param_group in muon.param_groups:
+                    param_group["lr"] = muon_lr
                 if ddp:
                     model.require_backward_grad_sync = (
                         micro_step == config["gradient_accumulation_steps"] - 1
@@ -234,10 +256,13 @@ def main():
 
             if config["grad_clip"] != 0.0:
                 scaler.unscale_(optimizer)
+                scaler.unscale_(muon)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config["grad_clip"])
             scaler.step(optimizer)
+            scaler.step(muon)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
+            muon.zero_grad(set_to_none=True)
             train_losses.append(loss.item() * config["gradient_accumulation_steps"])
             t1 = time.time()
             t1 - t0
