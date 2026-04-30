@@ -40,7 +40,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         # TRM-like flags (fallback to safe defaults if missing)
         self.share_blocks = getattr(config, "share_blocks", True)
-        self.num_recursive_steps = getattr(config, "num_recursive_steps", 4)
+        self.num_recursive_steps = 5
         self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)
         if not self.share_blocks:
             return
