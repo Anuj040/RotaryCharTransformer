@@ -45,7 +45,7 @@ class Muon(Optimizer):
                 buf.mul_(momentum).add_(g)
                 update = g.add(buf, alpha=momentum)
                 update = zeropower_via_newtonschulz5(update, steps=ns_steps)
-                update = update * (max(update.size(-2), update.size(-1)) ** 0.5)
+                update = update * (max(1.0, update.size(-2) / update.size(-1)) ** 0.5)
                 if wd != 0:
                     p.mul_(1 - lr * wd)
                 p.add_(update, alpha=-lr)
