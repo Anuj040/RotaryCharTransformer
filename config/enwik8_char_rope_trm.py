@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/sup3_2deep_2lyrxsainitperlyr_accum'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/apr30_baseline'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
