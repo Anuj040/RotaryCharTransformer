@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may01_dyn_routing'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may01_gru_gate'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
