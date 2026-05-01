@@ -85,16 +85,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
-        self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
-        self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
-        self.a_X = nn.Parameter(torch.tensor(1.0 / 3.0))
-        self.b_L = nn.Parameter(torch.tensor(0.5))
-        self.b_H = nn.Parameter(torch.tensor(0.5))
-        # self.a_L = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
-        # self.a_H = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
-        # self.a_X = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
-        # self.b_L = nn.Parameter(torch.ones(config.n_embd) * 0.5)
-        # self.b_H = nn.Parameter(torch.ones(config.n_embd) * 0.5)
+        # input-dependent routing: gates computed per-position from z_L
+        self.mix_gate_L = nn.Linear(config.n_embd, 3, bias=True)  # -> (a_L, a_H, a_X)
+        self.mix_gate_H = nn.Linear(config.n_embd, 2, bias=True)  # -> (b_L, b_H)
 
         self.n_L = nn.RMSNorm(config.n_embd)
         self.n_H = nn.RMSNorm(config.n_embd)
@@ -124,6 +117,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         # Zero-init value_emb so ve starts as no-op; trains in only when useful
         torch.nn.init.zeros_(self.value_emb.weight)
+        # Zero-init gate weights so initial softmax gives uniform 1/3, 1/2 routing
+        torch.nn.init.zeros_(self.mix_gate_L.weight)
+        torch.nn.init.zeros_(self.mix_gate_L.bias)
+        torch.nn.init.zeros_(self.mix_gate_H.weight)
+        torch.nn.init.zeros_(self.mix_gate_H.bias)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -148,16 +146,19 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         """
 
         for _ in range(self.num_recursive_steps - 1):
+            # per-position routing: softmax over (z_L, z_H, tok_emb) contributions
+            g = torch.softmax(self.mix_gate_L(z_L), dim=-1)  # (B, T, 3)
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
-                    self.a_L * self.n_L(z_L)
-                    + self.a_H * self.n_H(z_H)
-                    + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
+                    g[..., 0:1] * self.n_L(z_L)
+                    + g[..., 1:2] * self.n_H(z_H)
+                    + g[..., 2:3] * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
                 z_L = self.ln_l(block(mix_L, ve=ve))
 
+        g_H = torch.softmax(self.mix_gate_H(z_L), dim=-1)  # (B, T, 2)
         for block in self.transformer.h:
-            mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
+            mix_H = g_H[..., 0:1] * self.n_L2(z_L) + g_H[..., 1:2] * self.n_H2(z_H)
             z_H = self.ln_h(block(mix_H, ve=ve))
         return z_H, z_L
 
