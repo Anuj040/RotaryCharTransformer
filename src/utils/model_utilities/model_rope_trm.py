@@ -208,7 +208,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         if z_H is None or z_L is None:
             x_up = self.transformer["proj"][-1](x)
             z_L = x_up
-            z_H = self.h_init.expand_as(x_up).contiguous()
+            z_H = x_up + self.h_init
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             ve = self.value_emb(idx)
