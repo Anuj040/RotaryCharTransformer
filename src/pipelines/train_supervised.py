@@ -245,13 +245,13 @@ def main():
 
             if (iter_num + 1) % config["eval_interval"] == 0 and master_process:
                 losses = estimate_loss(model, val_loader, device, config, ctx)
-                print(
-                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val_0']:.4f} | val_bpc {losses['val_0'] / math.log(2):8.3f}"
-                )
                 val_bpc = {
                     f"val_bpc{super_ind}": val_loss / math.log(2)
                     for super_ind, val_loss in enumerate(losses.values())
                 }
+                print(
+                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val_0']:.4f} | val_bpc {min(val_bpc.values()):8.3f}"
+                )
                 wandb_logs = {
                     "train_loss": np.mean(train_losses),
                     "val_bpc": min(val_bpc.values()),
