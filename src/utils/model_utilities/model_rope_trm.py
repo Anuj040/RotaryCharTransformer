@@ -85,10 +85,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
-        n_inner = max(self.num_recursive_steps - 1, 1)
-        self.a_L = nn.Parameter(torch.full((n_inner,), 1.0 / 3.0))
-        self.a_H = nn.Parameter(torch.full((n_inner,), 1.0 / 3.0))
-        self.a_X = nn.Parameter(torch.full((n_inner,), 1.0 / 3.0))
+        self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
+        self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
+        self.a_X = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.b_L = nn.Parameter(torch.tensor(0.5))
         self.b_H = nn.Parameter(torch.tensor(0.5))
         # self.a_L = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
@@ -148,12 +147,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        for step_idx in range(self.num_recursive_steps - 1):
+        for _ in range(self.num_recursive_steps - 1):
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
-                    self.a_L[step_idx] * self.n_L(z_L)
-                    + self.a_H[step_idx] * self.n_H(z_H)
-                    + self.a_X[step_idx] * self.n_X(self.transformer["proj"][ind](tok_emb))
+                    self.a_L * self.n_L(z_L)
+                    + self.a_H * self.n_H(z_H)
+                    + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
                 z_L = self.ln_l(block(mix_L, ve=ve))
 
