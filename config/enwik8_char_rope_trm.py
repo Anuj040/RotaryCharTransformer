@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may01_ve_zL_only'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may01_ve_zH_only'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
