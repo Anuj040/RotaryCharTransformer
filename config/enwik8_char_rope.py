@@ -1,10 +1,7 @@
 import torch
 
 # Configuration for the modified model
-out_dir = 'outputs/rop_cmpl'  # Output directory for model checkpoints and logs
-eval_interval = 500
-eval_iters = 200
-log_interval = 100
+out_dir = 'outputs/may01_rope_byte_768'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -12,9 +9,12 @@ wandb_project = 'enwik8-char'
 wandb_run_name = out_dir.split("/")[-1]
 
 dataset = 'enwik8'
+encoding = 'byte'  # 'char' | 'byte'
 gradient_accumulation_steps = 1
-batch_size = 128  # Adjust based on your GPU memory
-block_size = 256  # Context length
+# batch/context tuned per encoding (OOM-swept on 16 GB GPU)
+batch_size = 64  if encoding == 'byte' else 128
+block_size = 768 if encoding == 'byte' else 256
+eval_iters = 200
 
 # Model parameters
 n_layer = 8
@@ -25,7 +25,8 @@ dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 
 # Optimization parameters
-max_iters = 4000#2500  # Number of iterations for training
+# scale iters so total tokens ≈ constant across encodings (262M)
+max_iters = 5333 if encoding == 'byte' else 4000
 learning_rate = 1e-3 * (5000 / max_iters) # Scaled learning rate
 lr_decay_iters = max_iters
 eval_interval = max_iters // 5

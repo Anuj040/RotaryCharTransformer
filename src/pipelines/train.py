@@ -83,9 +83,10 @@ def main():
     )
 
     data_dir = os.path.join("data", config["dataset"])
+    _sfx = "_byte" if config.get("encoding", "char") == "byte" else ""
 
     def get_batch(split):
-        data_path = os.path.join(data_dir, f"{split}.bin")
+        data_path = os.path.join(data_dir, f"{split}{_sfx}.bin")
         data = np.memmap(data_path, dtype=np.uint16, mode="r")
         ix = torch.randint(len(data) - config["block_size"], (config["batch_size"],))
         x = torch.stack(
@@ -109,7 +110,7 @@ def main():
             x, y = x.to(device), y.to(device)
         return x, y
 
-    meta_path = os.path.join(data_dir, "meta.pkl")
+    meta_path = os.path.join(data_dir, f"meta{_sfx}.pkl")
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
     vocab_size = meta["vocab_size"]
