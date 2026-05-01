@@ -124,6 +124,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         # Zero-init value_emb so ve starts as no-op; trains in only when useful
         torch.nn.init.zeros_(self.value_emb.weight)
+        # Wider wte init (std 0.02 -> 0.5); BPE vocab tokens need more separation
+        torch.nn.init.normal_(self.transformer.wte.weight, mean=0.0, std=0.5)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -154,7 +156,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
-                z_L = self.ln_l(block(mix_L, ve=None))
+                z_L = self.ln_l(block(mix_L, ve=ve))
 
         for block in self.transformer.h:
             mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
