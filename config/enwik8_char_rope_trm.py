@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may01_rec5'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may01_step_emb'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -13,7 +13,7 @@ dataset = 'enwik8'
 encoding = 'byte'  # 'char' = unicode codepoints (vocab=5458) | 'byte' = raw bytes (vocab=256)
 gradient_accumulation_steps = 1
 # batch/context tuned per encoding (OOM-swept on 16 GB GPU)
-batch_size = 48  if encoding == 'byte' else 128  # 64 OOMs at rec_steps=5
+batch_size = 64  if encoding == 'byte' else 128
 block_size = 768 if encoding == 'byte' else 256
 
 # Model parameters
@@ -24,7 +24,7 @@ freq = 10000  # Frequency parameter for RoPE
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 perlayerembeds = False
-num_recursive_steps = 5
+num_recursive_steps = 4
 num_deep_recursions = 2
 
 # Optimization parameters

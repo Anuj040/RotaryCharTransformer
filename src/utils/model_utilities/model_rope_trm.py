@@ -91,9 +91,14 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.b_L = nn.Parameter(torch.tensor(0.5))
         self.b_H = nn.Parameter(torch.tensor(0.5))
 
-        # GRU-style update gate: how much should z_L update toward the candidate?
-        # gate = sigmoid(linear(z_H)); z_L = (1-gate)*z_L + gate*candidate
-        self.update_gate = nn.Linear(config.n_embd, config.n_embd, bias=True)
+        # GRU-style scalar update gate
+        self.update_gate = nn.Linear(config.n_embd, 1, bias=True)
+
+        # Step embeddings: one per inner recursion step so the shared block knows
+        # which depth it's at (step 0 = raw tokens, step N = refined state).
+        self.step_embeddings = nn.Parameter(
+            torch.zeros(self.num_recursive_steps, config.n_embd)
+        )
 
         self.n_L = nn.RMSNorm(config.n_embd)
         self.n_H = nn.RMSNorm(config.n_embd)
@@ -149,12 +154,14 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        for _ in range(self.num_recursive_steps - 1):
+        for step in range(self.num_recursive_steps - 1):
+            step_bias = self.step_embeddings[step]  # (D,) broadcast over B, T
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
                     self.a_L * self.n_L(z_L)
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
+                    + step_bias
                 )
                 candidate = self.ln_l(block(mix_L, ve=ve))
                 gate = torch.sigmoid(self.update_gate(self.n_H(z_H)))
