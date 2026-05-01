@@ -41,7 +41,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # TRM-like flags (fallback to safe defaults if missing)
         self.share_blocks = getattr(config, "share_blocks", True)
         self.num_recursive_steps = getattr(config, "num_recursive_steps", 4)
-        self.num_deep_recursions = 3
+        self.num_deep_recursions = getattr(config, "num_deep_recursions", 2)
         if not self.share_blocks:
             return
 
@@ -88,6 +88,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_X = nn.Parameter(torch.tensor(1.0 / 3.0))
+        self.a_V = nn.Parameter(torch.tensor(0.0))
         self.b_L = nn.Parameter(torch.tensor(0.5))
         self.b_H = nn.Parameter(torch.tensor(0.5))
         # self.a_L = nn.Parameter(torch.ones(config.n_embd) * (1.0 / 3.0))
@@ -99,6 +100,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.n_L = nn.RMSNorm(config.n_embd)
         self.n_H = nn.RMSNorm(config.n_embd)
         self.n_X = nn.RMSNorm(config.n_embd)
+        self.n_V = nn.RMSNorm(config.n_embd)
 
         self.n_L2 = nn.RMSNorm(config.n_embd)
         self.n_H2 = nn.RMSNorm(config.n_embd)
@@ -136,6 +138,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         z_H: torch.Tensor,
         z_L: torch.Tensor,
         ve: torch.Tensor = None,
+        ve_norm: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         latent recursion: apply the shared Block num_recursive_steps times.
@@ -153,6 +156,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                     self.a_L * self.n_L(z_L)
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
+                    + self.a_V * ve_norm
                 )
                 z_L = self.ln_l(block(mix_L, ve=ve))
 
@@ -167,6 +171,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         z_H: torch.Tensor,
         z_L: torch.Tensor,
         ve: torch.Tensor = None,
+        ve_norm: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         deep recursion: T-1 latent recursions in no_grad, 1 with gradients.
@@ -184,10 +189,10 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         # First T-1 steps: no gradients
         for _ in range(T - 1):
             with torch.no_grad():
-                z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L, ve=ve)
+                z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L, ve=ve, ve_norm=ve_norm)
 
         # Final step: gradients flow
-        z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L, ve=ve)
+        z_H, z_L = self._latent_recursion(tok_emb, z_H, z_L, ve=ve, ve_norm=ve_norm)
         return z_H, z_L
 
     # --------------------------------------------------------------------- #
@@ -214,7 +219,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             ve = self.value_emb(idx)
-            z_H, z_L = self._deep_recursion(x, z_H, z_L, ve=ve)
+            ve_norm = self.n_V(ve)
+            z_H, z_L = self._deep_recursion(x, z_H, z_L, ve=ve, ve_norm=ve_norm)
             x = z_H
 
             # Q-head logits per token: [B, T, 2]
