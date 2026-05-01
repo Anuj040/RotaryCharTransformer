@@ -124,8 +124,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         # Zero-init value_emb so ve starts as no-op; trains in only when useful
         torch.nn.init.zeros_(self.value_emb.weight)
-        # Wider wte init (std 0.02 -> 0.5); BPE vocab tokens need more separation
-        torch.nn.init.normal_(self.transformer.wte.weight, mean=0.0, std=0.5)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -234,6 +232,15 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
+            # Auxiliary loss: directly supervise z_L scratchpad so it maintains
+            # task-relevant info and gradients flow deeper into the recursion.
+            if self.share_blocks:
+                aux_logits = self.lm_head(self.down_proj(self.transformer.ln_f(z_L)))
+                aux_logits = 15.0 * torch.tanh(aux_logits / 15.0)
+                aux_loss = F.cross_entropy(
+                    aux_logits.view(-1, aux_logits.size(-1)), targets.view(-1), ignore_index=-1
+                )
+                loss = loss + 0.1 * aux_loss
         else:
             # inference: only last time step
             logits = self.lm_head(self.down_proj(x[:, [-1], :]))
