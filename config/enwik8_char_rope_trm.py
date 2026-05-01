@@ -28,7 +28,9 @@ num_recursive_steps = 4
 num_deep_recursions = 2
 
 # Optimization parameters
-max_iters = 8000#2500  # Number of iterations for training
+# scale iters so total tokens ≈ constant across encodings
+# byte 64×768: 49152 tok/iter → 262M/49152 ≈ 5333; char 128×256: 32768 tok/iter → 8000
+max_iters = 5333 if encoding == 'byte' else 8000
 learning_rate = 1e-3 * (5000 / max_iters) # Scaled learning rate
 lr_decay_iters = max_iters
 eval_interval = max_iters // 5
