@@ -91,14 +91,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.b_L = nn.Parameter(torch.tensor(0.5))
         self.b_H = nn.Parameter(torch.tensor(0.5))
 
-        # GRU-style scalar update gate
-        self.update_gate = nn.Linear(config.n_embd, 1, bias=True)
-
-        # Step embeddings: one per inner recursion step so the shared block knows
-        # which depth it's at (step 0 = raw tokens, step N = refined state).
-        self.step_embeddings = nn.Parameter(
-            torch.zeros(self.num_recursive_steps, config.n_embd)
-        )
+        # GRU-style update gate: full-dim so each feature can be independently gated
+        self.update_gate = nn.Linear(config.n_embd, config.n_embd, bias=True)
 
         self.n_L = nn.RMSNorm(config.n_embd)
         self.n_H = nn.RMSNorm(config.n_embd)
@@ -154,14 +148,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        for step in range(self.num_recursive_steps - 1):
-            step_bias = self.step_embeddings[step]  # (D,) broadcast over B, T
+        for _ in range(self.num_recursive_steps - 1):
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
                     self.a_L * self.n_L(z_L)
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
-                    + step_bias
                 )
                 candidate = self.ln_l(block(mix_L, ve=ve))
                 gate = torch.sigmoid(self.update_gate(self.n_H(z_H)))
@@ -217,11 +209,14 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
         x = self.transformer.drop(tok_emb)
 
-        # init latent states z_H, z_L from fixed random buffers
+        # init latent states
         if z_H is None or z_L is None:
             x_up = self.transformer["proj"][-1](x)
             z_L = x_up
-            z_H = self.h_init.expand_as(x_up).contiguous()
+            # z_H: causal running mean of tok_emb + learned offset h_init
+            # gives each position a history-aware starting point for global context
+            counts = torch.arange(1, t + 1, device=x.device, dtype=x.dtype).view(1, t, 1)
+            z_H = x_up.cumsum(dim=1) / counts + self.h_init
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             ve = self.value_emb(idx)
