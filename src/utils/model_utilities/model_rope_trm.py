@@ -158,7 +158,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         for block in self.transformer.h:
             mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
-            z_H = self.ln_h(block(mix_H, ve=ve))
+            z_H = self.ln_h(block(mix_H, ve=None))
         return z_H, z_L
 
     def _deep_recursion(
