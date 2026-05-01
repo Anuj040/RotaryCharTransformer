@@ -130,7 +130,7 @@ def main():
             {"params": no_decay_params, "weight_decay": 0.0},
         ],
         lr=config["learning_rate"],
-        betas=(config["beta1"], config["beta2"]),
+        betas=(0.9, 0.95),
     )
 
     scaler = torch.amp.GradScaler(device_type, enabled=(config["dtype"] == "float16"))

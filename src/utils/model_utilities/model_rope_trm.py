@@ -83,9 +83,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.ln_l = nn.RMSNorm(config.n_embd)
 
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
-        ve_dim = config.n_embd // 4
-        self.value_emb = nn.Embedding(config.vocab_size, ve_dim)
-        self.value_proj = nn.Linear(ve_dim, config.n_embd, bias=False)
+        self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
@@ -215,7 +213,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             z_H = self.h_init.expand_as(x_up).contiguous()
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
-            ve = self.value_proj(self.value_emb(idx))
+            ve = self.value_emb(idx)
             z_H, z_L = self._deep_recursion(x, z_H, z_L, ve=ve)
             x = z_H
 
