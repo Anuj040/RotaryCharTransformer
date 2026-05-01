@@ -89,10 +89,11 @@ def main():
     )
 
     data_dir = os.path.join("data", config["dataset"])
+    _sfx = "_byte" if config.get("encoding", "char") == "byte" else ""
     train_dataset = EnwikDataset(
-        os.path.join(data_dir, "train.bin"), config["block_size"]
+        os.path.join(data_dir, f"train{_sfx}.bin"), config["block_size"]
     )
-    val_dataset = EnwikDataset(os.path.join(data_dir, "val.bin"), config["block_size"])
+    val_dataset = EnwikDataset(os.path.join(data_dir, f"val{_sfx}.bin"), config["block_size"])
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -112,7 +113,7 @@ def main():
     )
     train_loader = cycle(train_loader)
 
-    meta_path = os.path.join(data_dir, "meta.pkl")
+    meta_path = os.path.join(data_dir, f"meta{_sfx}.pkl")
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
     vocab_size = meta["vocab_size"]

@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may01_diff_attn'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may01_byte_level'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -10,6 +10,7 @@ wandb_project = 'enwik8-char'
 wandb_run_name = out_dir.split("/")[-1]
 
 dataset = 'enwik8'
+encoding = 'byte'  # 'char' = unicode codepoints (vocab=5458) | 'byte' = raw bytes (vocab=256)
 gradient_accumulation_steps = 1
 batch_size = 128 # Adjust based on your GPU memory
 block_size = 256 # Context length

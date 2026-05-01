@@ -213,12 +213,6 @@ class CausalSelfAttention(nn.Module):
                 dim=head_dim, freq=config.freq
             )
 
-        # Differential attention: second Q projection + learned mixing weight.
-        # Computes y = attn(Q1,K,V) - lambda * attn(Q2,K,V) to cancel attn noise.
-        if not cross_attn:
-            self.q2_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
-            self.diff_lambda = nn.Parameter(torch.tensor(-5.0))  # sigmoid(-5)~0.007 at init
-
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
 
@@ -253,16 +247,9 @@ class CausalSelfAttention(nn.Module):
         k = self.k_norm(k)
 
         # RoPE on q,k; also capture cos/sin for q2
-        cos, sin = None, None
+        # RoPE on q,k
         if self.rotary_emb is not None:
-            q, k, cos, sin = self.rotary_emb(q, k)
-
-        # Second query for differential attention (non-cross-attn only)
-        if not self.cross_attn:
-            q2 = self.q2_proj(x).view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
-            q2 = self.q_norm(q2)
-            if cos is not None:
-                q2 = apply_rotary_pos_emb(q2, cos, sin)
+            q, k = self.rotary_emb(q, k)
 
         # Prefer SDPA (FlashAttention when available)
         if self.use_sdpa and hasattr(F, "scaled_dot_product_attention"):
@@ -276,12 +263,13 @@ class CausalSelfAttention(nn.Module):
                 ]
             ):
                 y = F.scaled_dot_product_attention(
-                    q, k, v, dropout_p=dropout_p, is_causal=True, scale=1.0 / math.sqrt(head_dim),
+                    q,
+                    k,
+                    v,
+                    dropout_p=dropout_p,
+                    is_causal=True,
+                    scale=1.0 / math.sqrt(head_dim),
                 )
-                if not self.cross_attn:
-                    y2 = F.scaled_dot_product_attention(
-                        q2, k, v, dropout_p=dropout_p, is_causal=True, scale=1.0 / math.sqrt(head_dim),
-                    )
         else:
             # Manual masked softmax fallback
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))
@@ -289,17 +277,6 @@ class CausalSelfAttention(nn.Module):
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v
-            if not self.cross_attn:
-                att2 = (q2 @ k.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))
-                att2 = att2.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
-                att2 = F.softmax(att2, dim=-1)
-                att2 = self.attn_dropout(att2)
-                y2 = att2 @ v
-
-        # Differential attention: cancel correlated noise between Q1 and Q2 maps
-        if not self.cross_attn:
-            lam = torch.sigmoid(self.diff_lambda)
-            y = y - lam * y2
 
         # XSA Mode: https://www.youtube.com/watch?v=2eZKT4H9_iQ
         vn = torch.nn.functional.normalize(v, dim=-1)
@@ -325,7 +302,9 @@ class RotaryEmbedding(nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos()[None, None, :, :]
         sin = emb.sin()[None, None, :, :]
-        return apply_rotary_pos_emb(q, cos, sin), apply_rotary_pos_emb(k, cos, sin), cos, sin
+        q = apply_rotary_pos_emb(q, cos, sin)
+        k = apply_rotary_pos_emb(k, cos, sin)
+        return q, k
 
 
 class MLP(nn.Module):

@@ -124,10 +124,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         # Zero-init value_emb so ve starts as no-op; trains in only when useful
         torch.nn.init.zeros_(self.value_emb.weight)
-        # Zero-init q2_proj so differential attention starts as no-op (q2→0→uniform attn)
-        for m in self.modules():
-            if hasattr(m, "q2_proj") and m.q2_proj is not None:
-                torch.nn.init.zeros_(m.q2_proj.weight)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -201,7 +197,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             return super().forward(idx, targets)
 
         idx.device
-        b, t = idx.size()
+        _, t = idx.size()
         assert (
             t <= self.config.block_size
         ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
