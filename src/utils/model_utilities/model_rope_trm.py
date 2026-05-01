@@ -88,9 +88,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_X = nn.Parameter(torch.tensor(1.0 / 3.0))
-        self.b_L = nn.Parameter(torch.tensor(1.0 / 3.0))
-        self.b_H = nn.Parameter(torch.tensor(1.0 / 3.0))
-        self.b_X = nn.Parameter(torch.tensor(0.0))  # zero-init: no-op start for tok_emb in z_H
+        self.b_L = nn.Parameter(torch.tensor(0.5))
+        self.b_H = nn.Parameter(torch.tensor(0.5))
 
         # GRU-style update gate: how much should z_L update toward the candidate?
         # gate = sigmoid(linear(z_H)); z_L = (1-gate)*z_L + gate*candidate
@@ -161,12 +160,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 gate = torch.sigmoid(self.update_gate(self.n_H(z_H)))
                 z_L = (1.0 - gate) * z_L + gate * candidate
 
-        for ind, block in enumerate(self.transformer.h):
-            mix_H = (
-                self.b_L * self.n_L2(z_L)
-                + self.b_H * self.n_H2(z_H)
-                + self.b_X * self.n_X(self.transformer["proj"][ind](tok_emb))
-            )
+        for block in self.transformer.h:
+            mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
             z_H = self.ln_h(block(mix_H, ve=ve))
         return z_H, z_L
 
