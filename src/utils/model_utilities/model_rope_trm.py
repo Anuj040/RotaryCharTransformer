@@ -122,6 +122,8 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
         # Untied lm_head with tight init (modded-nanoGPT style)
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
+        # Zero-init value_emb so ve starts as no-op; trains in only when useful
+        torch.nn.init.zeros_(self.value_emb.weight)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -208,7 +210,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         if z_H is None or z_L is None:
             x_up = self.transformer["proj"][-1](x)
             z_L = x_up
-            z_H = x_up + self.h_init
+            z_H = self.h_init.expand_as(x_up).contiguous()
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             ve = self.value_emb(idx)
