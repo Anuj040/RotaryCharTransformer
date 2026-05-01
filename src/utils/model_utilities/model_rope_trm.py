@@ -79,9 +79,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             bias=False,
         )
 
-        self.ln_h = nn.RMSNorm(config.n_embd)
-        self.ln_l = nn.RMSNorm(config.n_embd)
-
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
@@ -154,11 +151,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
-                z_L = self.ln_l(block(mix_L, ve=ve))
+                z_L = block(mix_L, ve=ve)
 
         for block in self.transformer.h:
             mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
-            z_H = self.ln_h(block(mix_H, ve=ve))
+            z_H = block(mix_H, ve=ve)
         return z_H, z_L
 
     def _deep_recursion(

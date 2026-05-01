@@ -162,8 +162,6 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config, use_rope, cross_attn=cross_attn)
         self.ln_2 = nn.RMSNorm(config.n_embd)
         self.mlp = MLP(config)
-        self.gamma_attn = nn.Parameter(torch.ones(config.n_embd))
-        self.gamma_mlp = nn.Parameter(torch.ones(config.n_embd))
         if cross_attn:
             self.ln_3 = nn.RMSNorm(config.n_embd)
 
@@ -173,8 +171,8 @@ class Block(nn.Module):
         kv: Optional[torch.Tensor] = None,
         ve: Optional[torch.Tensor] = None,
     ):
-        x = x + self.gamma_attn * self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None, ve=ve)
-        x = x + self.gamma_mlp * self.mlp(self.ln_2(x))
+        x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None, ve=ve)
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 
