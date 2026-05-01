@@ -276,10 +276,6 @@ class CausalSelfAttention(nn.Module):
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v
-        # XSA Mode: https://www.youtube.com/watch?v=2eZKT4H9_iQ
-        vn = torch.nn.functional.normalize(v, dim=-1)
-        y = y - (y * vn).sum(dim=-1, keepdim=True) * vn
-
         # Back to (B, T, C)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.c_proj(y))

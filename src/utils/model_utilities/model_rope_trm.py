@@ -232,15 +232,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
-            # Auxiliary loss: directly supervise z_L scratchpad so it maintains
-            # task-relevant info and gradients flow deeper into the recursion.
-            if self.share_blocks:
-                aux_logits = self.lm_head(self.down_proj(self.transformer.ln_f(z_L)))
-                aux_logits = 15.0 * torch.tanh(aux_logits / 15.0)
-                aux_loss = F.cross_entropy(
-                    aux_logits.view(-1, aux_logits.size(-1)), targets.view(-1), ignore_index=-1
-                )
-                loss = loss + 0.1 * aux_loss
         else:
             # inference: only last time step
             logits = self.lm_head(self.down_proj(x[:, [-1], :]))
