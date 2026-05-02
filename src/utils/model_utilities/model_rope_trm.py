@@ -209,14 +209,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
         x = self.transformer.drop(tok_emb)
 
-        # init latent states
+        # init latent states z_H, z_L from fixed random buffers
         if z_H is None or z_L is None:
             x_up = self.transformer["proj"][-1](x)
             z_L = x_up
-            # z_H: causal running mean of tok_emb + learned offset h_init
-            # gives each position a history-aware starting point for global context
-            counts = torch.arange(1, t + 1, device=x.device, dtype=x.dtype).view(1, t, 1)
-            z_H = x_up.cumsum(dim=1) / counts + self.h_init
+            z_H = self.h_init.expand_as(x_up).contiguous()
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
             ve = self.value_emb(idx)

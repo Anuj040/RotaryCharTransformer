@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may01_zh_causal_init'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may02_deep_rec1'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -25,7 +25,7 @@ dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 perlayerembeds = False
 num_recursive_steps = 4
-num_deep_recursions = 2
+num_deep_recursions = 1
 
 # Optimization parameters
 # scale iters so total tokens ≈ constant across encodings
