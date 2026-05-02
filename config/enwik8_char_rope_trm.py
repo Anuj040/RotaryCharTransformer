@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may02_multiscale_rope'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may02_multiscale_rope_lo100'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -20,8 +20,8 @@ block_size = 768 if encoding == 'byte' else 256
 n_layer = 8
 n_head = 8
 n_embd = 512
-freq = 10000     # high-freq RoPE for heads 0..3 (local patterns)
-freq_lo = 1000  # low-freq RoPE for heads 4..7 (longer-range patterns)
+freq = 10000    # high-freq RoPE for heads 0..3 (local patterns)
+freq_lo = 100  # low-freq RoPE for heads 4..7; period~628 ≈ context length
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 perlayerembeds = False
