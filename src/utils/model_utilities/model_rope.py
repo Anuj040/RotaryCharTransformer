@@ -208,10 +208,12 @@ class CausalSelfAttention(nn.Module):
         self.k_norm = nn.RMSNorm(head_dim)
 
         self.rotary_emb = None
+        self.rotary_emb_lo = None
         if use_rope:
-            self.rotary_emb = RotaryEmbedding(
-                dim=head_dim, freq=config.freq
-            )
+            self.rotary_emb = RotaryEmbedding(dim=head_dim, freq=config.freq)
+            freq_lo = getattr(config, "freq_lo", config.freq)
+            if freq_lo != config.freq:
+                self.rotary_emb_lo = RotaryEmbedding(dim=head_dim, freq=freq_lo)
 
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
@@ -246,10 +248,18 @@ class CausalSelfAttention(nn.Module):
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        # RoPE on q,k; also capture cos/sin for q2
-        # RoPE on q,k
+        # RoPE: optionally split heads into high-freq and low-freq groups
         if self.rotary_emb is not None:
-            q, k = self.rotary_emb(q, k)
+            if self.rotary_emb_lo is None:
+                q, k = self.rotary_emb(q, k)
+            else:
+                half = self.n_head // 2
+                q_hi, q_lo = q[:, :half], q[:, half:]
+                k_hi, k_lo = k[:, :half], k[:, half:]
+                q_hi, k_hi = self.rotary_emb(q_hi, k_hi)
+                q_lo, k_lo = self.rotary_emb_lo(q_lo, k_lo)
+                q = torch.cat([q_hi, q_lo], dim=1)
+                k = torch.cat([k_hi, k_lo], dim=1)
 
         # Prefer SDPA (FlashAttention when available)
         if self.use_sdpa and hasattr(F, "scaled_dot_product_attention"):
