@@ -91,8 +91,10 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.b_L = nn.Parameter(torch.tensor(0.5))
         self.b_H = nn.Parameter(torch.tensor(0.5))
 
-        # GRU-style update gate: full-dim so each feature can be independently gated
+        # GRU-style update gates: full-dim so each feature can be independently gated
         self.update_gate = nn.Linear(config.n_embd, config.n_embd, bias=True)
+        # z_H gate: conditioned on z_L (local stream has freshest token info)
+        self.update_gate_H = nn.Linear(config.n_embd, config.n_embd, bias=True)
 
         self.n_L = nn.RMSNorm(config.n_embd)
         self.n_H = nn.RMSNorm(config.n_embd)
@@ -122,9 +124,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         # Zero-init value_emb so ve starts as no-op; trains in only when useful
         torch.nn.init.zeros_(self.value_emb.weight)
-        # Init update_gate weight to 0; bias to 0 → initial sigmoid = 0.5 (half-update)
+        # Init update gates weight to 0; bias to 0 → initial sigmoid = 0.5 (half-update)
         torch.nn.init.zeros_(self.update_gate.weight)
         torch.nn.init.zeros_(self.update_gate.bias)
+        torch.nn.init.zeros_(self.update_gate_H.weight)
+        torch.nn.init.zeros_(self.update_gate_H.bias)
 
         # Report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -148,10 +152,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        # Equal-rate alternating: each step updates z_L (both blocks) then z_H (both blocks).
-        # num_recursive_steps=2 → 2×(2 z_L apps + 2 z_H apps) = 8 block-apps total,
-        # compute-neutral vs old 3×2 z_L + 1×2 z_H = 8. z_H now refreshed every step.
-        for _ in range(self.num_recursive_steps):
+        for _ in range(self.num_recursive_steps - 1):
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
                     self.a_L * self.n_L(z_L)
@@ -161,9 +162,12 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 candidate = self.ln_l(block(mix_L, ve=ve))
                 gate = torch.sigmoid(self.update_gate(self.n_H(z_H)))
                 z_L = (1.0 - gate) * z_L + gate * candidate
-            for block in self.transformer.h:
-                mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
-                z_H = self.ln_h(block(mix_H, ve=ve))
+
+        for block in self.transformer.h:
+            mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
+            candidate_H = self.ln_h(block(mix_H, ve=ve))
+            gate_H = torch.sigmoid(self.update_gate_H(self.n_L2(z_L)))
+            z_H = (1.0 - gate_H) * z_H + gate_H * candidate_H
         return z_H, z_L
 
     def _deep_recursion(

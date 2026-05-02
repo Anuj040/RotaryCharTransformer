@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may02_alternating_equal'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may02_gru_gate_zh'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -24,7 +24,7 @@ freq = 10000  # Frequency parameter for RoPE
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 perlayerembeds = False
-num_recursive_steps = 2
+num_recursive_steps = 4
 num_deep_recursions = 2
 
 # Optimization parameters
