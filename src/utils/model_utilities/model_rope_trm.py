@@ -84,6 +84,11 @@ class TRMGPTWithRoPE(GPTWithRoPE):
 
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
+        # Per-step value offsets: each inner step shifts token values to attend to
+        # different aspects (zero-init = no-op start, trains in if useful)
+        self.ve_step_offsets = nn.Parameter(
+            torch.zeros(self.num_recursive_steps, config.n_embd)
+        )
 
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
@@ -148,14 +153,15 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        for _ in range(self.num_recursive_steps - 1):
+        for step in range(self.num_recursive_steps - 1):
+            ve_step = ve + self.ve_step_offsets[step]
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
                     self.a_L * self.n_L(z_L)
                     + self.a_H * self.n_H(z_H)
                     + self.a_X * self.n_X(self.transformer["proj"][ind](tok_emb))
                 )
-                candidate = self.ln_l(block(mix_L, ve=ve))
+                candidate = self.ln_l(block(mix_L, ve=ve_step))
                 gate = torch.sigmoid(self.update_gate(self.n_H(z_H)))
                 z_L = (1.0 - gate) * z_L + gate * candidate
 
