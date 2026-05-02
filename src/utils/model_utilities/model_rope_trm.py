@@ -148,10 +148,7 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             y = net(y, z)
         """
 
-        # Equal-rate alternating: each step updates z_L (both blocks) then z_H (both blocks).
-        # num_recursive_steps=2 → 2×(2 z_L apps + 2 z_H apps) = 8 block-apps total,
-        # compute-neutral vs old 3×2 z_L + 1×2 z_H = 8. z_H now refreshed every step.
-        for _ in range(self.num_recursive_steps):
+        for _ in range(self.num_recursive_steps - 1):
             for ind, block in enumerate(self.transformer.h):
                 mix_L = (
                     self.a_L * self.n_L(z_L)
@@ -161,9 +158,10 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 candidate = self.ln_l(block(mix_L, ve=ve))
                 gate = torch.sigmoid(self.update_gate(self.n_H(z_H)))
                 z_L = (1.0 - gate) * z_L + gate * candidate
-            for block in self.transformer.h:
-                mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
-                z_H = self.ln_h(block(mix_H, ve=ve))
+
+        for block in self.transformer.h:
+            mix_H = self.b_L * self.n_L2(z_L) + self.b_H * self.n_H2(z_H)
+            z_H = self.ln_h(block(mix_H, ve=ve))
         return z_H, z_L
 
     def _deep_recursion(
