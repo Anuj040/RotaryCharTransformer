@@ -5,7 +5,6 @@ import os
 import pickle
 import time
 from contextlib import nullcontext
-from itertools import cycle
 
 import numpy as np
 import torch
@@ -14,7 +13,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from tqdm import tqdm
 
 import wandb
-from src.utils.data_utils.prepare_dataset import EnwikDataset
+from src.utils.data_utils.prepare_dataset import get_dataloaders
 from src.utils.eval_utils.loss_fn import estimate_loss
 from src.utils.model_utilities.pick_model import select_model
 from src.utils.train_utils.misc import get_lr, scale_hyperparams
@@ -90,28 +89,7 @@ def main():
 
     data_dir = os.path.join("data", config["dataset"])
     _sfx = "_byte" if config.get("encoding", "char") == "byte" else ""
-    train_dataset = EnwikDataset(
-        os.path.join(data_dir, f"train{_sfx}.bin"), config["block_size"]
-    )
-    val_dataset = EnwikDataset(os.path.join(data_dir, f"val{_sfx}.bin"), config["block_size"])
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=config["batch_size"],
-        shuffle=True,
-        prefetch_factor=4,
-        pin_memory=(device_type == "cuda"),
-        num_workers=4 if device_type == "cuda" else 2,
-    )
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=2 * config["batch_size"],
-        shuffle=False,
-        prefetch_factor=8,
-        pin_memory=(device_type == "cuda"),
-        num_workers=4 if device_type == "cuda" else 2,
-    )
-    train_loader = cycle(train_loader)
+    train_loader, val_loader = get_dataloaders(config, device_type)
 
     meta_path = os.path.join(data_dir, f"meta{_sfx}.pkl")
     with open(meta_path, "rb") as f:
@@ -250,7 +228,8 @@ def main():
                     for super_ind, val_loss in enumerate(losses.values())
                 }
                 print(
-                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val_0']:.4f} | val_bpc {min(val_bpc.values()):8.3f}"
+                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val_0']:.4f} | val_bpc {min(val_bpc.values()):8.3f}",
+                    flush=True,
                 )
                 wandb_logs = {
                     "train_loss": np.mean(train_losses),
@@ -275,8 +254,6 @@ def main():
                     torch.save(checkpoint, checkpoint_path)
                     print(f"Saved checkpoint to {checkpoint_path}")
 
-                ## Single Epoch run for Autoresearch
-                break
             iter_num += 1
             local_iter_num += 1
             pbar.update(1)
