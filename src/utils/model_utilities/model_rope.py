@@ -52,7 +52,7 @@ class GPTWithRoPE(nn.Module):
                     ]
                 ),
                 proj=nn.ModuleList(perlayerembeds),
-                ln_f=nn.LayerNorm(config.n_embd),
+                ln_f=nn.RMSNorm(config.n_embd),
             )
         )
         self.lm_head = nn.Linear(
@@ -67,6 +67,11 @@ class GPTWithRoPE(nn.Module):
             if self.config.perlayerembeds
             else nn.Identity()
         )
+        self.value_emb = None
+        if getattr(self.config, "value_emb", False):
+            self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
+            # Zero-init value_emb so ve starts as no-op; trains in only when useful
+            torch.nn.init.zeros_(self.value_emb.weight)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -106,20 +111,14 @@ class GPTWithRoPE(nn.Module):
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
 
         x = self.transformer.drop(tok_emb)
+        ve = None
+        if self.value_emb is not None:
+            ve = self.value_emb(idx)
         for ind, block in enumerate(self.transformer.h):
-            x = block(self.transformer["proj"][ind](x))
+            x = block(self.transformer["proj"][ind](x), ve=ve)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(self.down_proj(x))
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
-            )
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
-            loss = None
+        logits, loss = self.calc_loss(x, targets)
 
         return logits, loss
 
@@ -154,19 +153,42 @@ class GPTWithRoPE(nn.Module):
 
         return optimizer
 
+    def calc_loss(
+        self, x: torch.Tensor, targets: torch.Tensor = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if targets is not None:
+            logits = self.lm_head(self.down_proj(x))
+            logits = 15.0 * torch.tanh(logits / 15.0)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
+        else:
+            # inference: only last time step
+            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
+            logits = 15.0 * torch.tanh(logits / 15.0)
+            loss = None
+        return logits, loss
+
 
 class Block(nn.Module):
     def __init__(self, config, use_rope: bool = True, cross_attn: bool = False) -> None:
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.ln_1 = nn.RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config, use_rope, cross_attn=cross_attn)
-        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.ln_2 = nn.RMSNorm(config.n_embd)
         self.mlp = MLP(config)
         if cross_attn:
-            self.ln_3 = nn.LayerNorm(config.n_embd)
+            self.ln_3 = nn.RMSNorm(config.n_embd)
 
-    def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
-        x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None)
+    def forward(
+        self,
+        x: torch.Tensor,
+        kv: Optional[torch.Tensor] = None,
+        ve: Optional[torch.Tensor] = None,
+    ):
+        x = x + self.attn(
+            self.ln_1(x), self.ln_3(kv) if kv is not None else None, ve=ve
+        )
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -198,16 +220,27 @@ class CausalSelfAttention(nn.Module):
             persistent=False,
         )
 
+        head_dim = config.n_embd // config.n_head
+        self.q_norm = nn.RMSNorm(head_dim)
+        self.k_norm = nn.RMSNorm(head_dim)
+
         self.rotary_emb = None
+        self.rotary_emb_lo = None
         if use_rope:
-            self.rotary_emb = RotaryEmbedding(
-                dim=config.n_embd // config.n_head, freq=config.freq
-            )
+            self.rotary_emb = RotaryEmbedding(dim=head_dim, freq=config.freq)
+            freq_lo = getattr(config, "freq_lo", config.freq)
+            if freq_lo != config.freq:
+                self.rotary_emb_lo = RotaryEmbedding(dim=head_dim, freq=freq_lo)
 
         # Optional toggle if you want to force the old path.
         self.use_sdpa = torch.cuda.is_available()  # getattr(config, "use_sdpa", True)
 
-    def forward(self, x: torch.Tensor, kv: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        kv: Optional[torch.Tensor] = None,
+        ve: Optional[torch.Tensor] = None,
+    ):
         B, T, C = x.size()
         head_dim = C // self.n_head
 
@@ -226,9 +259,24 @@ class CausalSelfAttention(nn.Module):
             kv = kv.view(B, T, 2, self.n_head, head_dim).permute(2, 0, 3, 1, 4)
             k, v = kv[0], kv[1]
 
-        # RoPE on q,k
+        if ve is not None:
+            v = v + ve.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3)
+
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        # RoPE: optionally split heads into high-freq and low-freq groups
         if self.rotary_emb is not None:
-            q, k = self.rotary_emb(q, k)
+            if self.rotary_emb_lo is None:
+                q, k = self.rotary_emb(q, k)
+            else:
+                half = self.n_head // 2
+                q_hi, q_lo = q[:, :half], q[:, half:]
+                k_hi, k_lo = k[:, :half], k[:, half:]
+                q_hi, k_hi = self.rotary_emb(q_hi, k_hi)
+                q_lo, k_lo = self.rotary_emb_lo(q_lo, k_lo)
+                q = torch.cat([q_hi, q_lo], dim=1)
+                k = torch.cat([k_hi, k_lo], dim=1)
 
         # Prefer SDPA (FlashAttention when available)
         if self.use_sdpa and hasattr(F, "scaled_dot_product_attention"):
@@ -256,6 +304,7 @@ class CausalSelfAttention(nn.Module):
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v
+
         # XSA Mode: https://www.youtube.com/watch?v=2eZKT4H9_iQ
         vn = torch.nn.functional.normalize(v, dim=-1)
         y = y - (y * vn).sum(dim=-1, keepdim=True) * vn
@@ -281,7 +330,7 @@ class RotaryEmbedding(nn.Module):
         cos = emb.cos()[None, None, :, :]
         sin = emb.sin()[None, None, :, :]
         q = apply_rotary_pos_emb(q, cos, sin)
-        k = apply_rotary_pos_emb(k, cos, sin)  # Fix the call for 'k'
+        k = apply_rotary_pos_emb(k, cos, sin)
         return q, k
 
 
@@ -294,7 +343,7 @@ class MLP(nn.Module):
 
     def forward(self, x):
         x = self.c_fc(x)
-        x = F.gelu(x)  # Use standard GELU
+        x = F.relu(x).square()
         x = self.c_proj(x)
         x = self.dropout(x)
         return x

@@ -13,7 +13,10 @@ from torch.distributed import destroy_process_group, init_process_group
 from tqdm import tqdm
 
 import wandb
+from src.utils.data_utils.prepare_dataset import get_dataloaders
+from src.utils.eval_utils.loss_fn import estimate_loss
 from src.utils.model_utilities.pick_model import select_model
+from src.utils.train_utils.misc import get_lr
 
 
 def get_serializable_config(config):
@@ -35,7 +38,6 @@ def main():
         exec(f.read(), {}, config)
 
     config = {k: v for k, v in config.items() if not k.startswith("__")}
-
     if "out_dir" not in config:
         print("Error: 'out_dir' not specified in the configuration file.")
         return
@@ -83,33 +85,10 @@ def main():
     )
 
     data_dir = os.path.join("data", config["dataset"])
+    _sfx = "_byte" if config.get("encoding", "char") == "byte" else ""
+    train_loader, val_loader = get_dataloaders(config, device_type)
 
-    def get_batch(split):
-        data_path = os.path.join(data_dir, f"{split}.bin")
-        data = np.memmap(data_path, dtype=np.uint16, mode="r")
-        ix = torch.randint(len(data) - config["block_size"], (config["batch_size"],))
-        x = torch.stack(
-            [
-                torch.from_numpy((data[i : i + config["block_size"]]).astype(np.int64))
-                for i in ix
-            ]
-        )
-        y = torch.stack(
-            [
-                torch.from_numpy(
-                    (data[i + 1 : i + 1 + config["block_size"]]).astype(np.int64)
-                )
-                for i in ix
-            ]
-        )
-        if device_type == "cuda":
-            x = x.pin_memory().to(device, non_blocking=True)
-            y = y.pin_memory().to(device, non_blocking=True)
-        else:
-            x, y = x.to(device), y.to(device)
-        return x, y
-
-    meta_path = os.path.join(data_dir, "meta.pkl")
+    meta_path = os.path.join(data_dir, f"meta{_sfx}.pkl")
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
     vocab_size = meta["vocab_size"]
@@ -156,33 +135,6 @@ def main():
             config=get_serializable_config(config),
         )
 
-    @torch.inference_mode()
-    def estimate_loss():
-        out = {}
-        model.eval()
-        for split in ["val"]:
-            losses = torch.zeros(config["eval_iters"])
-            for k in range(config["eval_iters"]):
-                X, Y = get_batch(split)
-                with ctx:
-                    logits, loss = model(X, Y)
-                losses[k] = loss.item()
-            out[split] = losses.mean()
-        model.train()
-        return out
-
-    def get_lr(it):
-        if it < config["warmup_iters"]:
-            return config["learning_rate"] * it / config["warmup_iters"]
-        if it > config["lr_decay_iters"]:
-            return config["min_lr"]
-        decay_ratio = (it - config["warmup_iters"]) / (
-            config["lr_decay_iters"] - config["warmup_iters"]
-        )
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-        return config["min_lr"] + coeff * (config["learning_rate"] - config["min_lr"])
-
-    X, Y = get_batch("train")
     t0 = time.time()
 
     local_iter_num = 0
@@ -190,8 +142,13 @@ def main():
 
     with tqdm(total=config["max_iters"]) as pbar:
         train_losses = []
-        while iter_num < config["max_iters"]:
-            lr = config["learning_rate"] if not config["decay_lr"] else get_lr(iter_num)
+        for X, Y in train_loader:
+            X, Y = X.to(device, non_blocking=True), Y.to(device, non_blocking=True)
+            lr = (
+                config["learning_rate"]
+                if not config["decay_lr"]
+                else get_lr(iter_num, config)
+            )
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
@@ -203,7 +160,6 @@ def main():
                 with ctx:
                     logits, loss = model(X, Y)
                     loss = loss / config["gradient_accumulation_steps"]
-                X, Y = get_batch("train")
                 scaler.scale(loss).backward()
 
             if config["grad_clip"] != 0.0:
@@ -219,21 +175,21 @@ def main():
             t0 = t1
 
             if iter_num % config["eval_interval"] == 0 and master_process:
-                losses = estimate_loss()
+                losses = estimate_loss(model, val_loader, device, config, ctx)
                 print(
-                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val']:.4f} | val_bpc {losses['val'] / math.log(2):8.3f}"
+                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses["val_0"]:.4f} | val_bpc {losses["val_0"] / math.log(2):8.3f}"
                 )
                 wandb.log(
                     {
                         "step": iter_num,
                         "train_loss": np.mean(train_losses),
-                        "val_loss": losses["val"],
-                        "val_bpc": losses["val"] / math.log(2),
+                        "val_loss": losses["val_0"],
+                        "val_bpc": losses["val_0"] / math.log(2),
                     },
                     step=iter_num,
                 )
-                if losses["val"] < best_val_loss or config["always_save_checkpoint"]:
-                    best_val_loss = losses["val"]
+                if losses["val_0"] < best_val_loss or config["always_save_checkpoint"]:
+                    best_val_loss = losses["val_0"]
                     checkpoint = {
                         "model": raw_model.state_dict(),
                         "optimizer": optimizer.state_dict(),
@@ -254,6 +210,8 @@ def main():
                 print(
                     f"Iter {iter_num}: loss {lossf:5.2f} | ppl {math.exp(lossf):8.2f} | bpc {lossf / math.log(2):8.3f}"
                 )
+            if iter_num > config["max_iters"]:
+                break
 
     if ddp:
         destroy_process_group()

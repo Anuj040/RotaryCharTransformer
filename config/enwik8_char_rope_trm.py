@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/sup3_2deep_2lyrxsainitperlyr_accum'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may02_full0.9lr'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -10,24 +10,29 @@ wandb_project = 'enwik8-char'
 wandb_run_name = out_dir.split("/")[-1]
 
 dataset = 'enwik8'
+encoding = 'byte'  # 'char' = unicode codepoints (vocab=5458) | 'byte' = raw bytes (vocab=256)
 gradient_accumulation_steps = 1
-batch_size = 128 # Adjust based on your GPU memory
-block_size = 256 # Context length
+# batch/context tuned per encoding (OOM-swept on 16 GB GPU)
+batch_size = 64  if encoding == 'byte' else 128
+block_size = 768 if encoding == 'byte' else 256
 
 # Model parameters
 n_layer = 8
 n_head = 8
 n_embd = 512
-freq = 10000  # Frequency parameter for RoPE
-dropout = 0.1  # Added some dropout for regularization
+freq = 10000  # Frequency parameter for RoPE (set freq_lo != freq to enable multi-scale)
+dropout = 0.0  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
+value_emb = True
 perlayerembeds = False
 num_recursive_steps = 4
 num_deep_recursions = 2
 
 # Optimization parameters
-max_iters = 8000#2500  # Number of iterations for training
-learning_rate = 1e-3 * (5000 / max_iters) # Scaled learning rate
+# scale iters so total tokens ≈ constant across encodings
+# byte 64×768: 49152 tok/iter → 262M/49152 ≈ 5333; char 128×256: 32768 tok/iter → 8000
+max_iters = 5333 if encoding == 'byte' else 8000
+learning_rate = 0.94e-3 * (batch_size / 64) # Scaled learning rate
 lr_decay_iters = max_iters
 eval_interval = max_iters // 5
 log_interval = 500

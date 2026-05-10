@@ -151,6 +151,7 @@ class GPTConfig:
     perlayerembeds: bool = False
     num_recursive_steps: int = 4
     num_deep_recursions: int = 2
+    value_emb: bool = False
 
 
 class GPT(nn.Module):
