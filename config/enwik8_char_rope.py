@@ -1,7 +1,7 @@
 import torch
 
 # Configuration for the modified model
-out_dir = 'outputs/may01_rope_byte_768'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/ropemay02_full0.9lr_valemb'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -21,13 +21,14 @@ n_layer = 8
 n_head = 8
 n_embd = 512
 freq = 10000  # Frequency parameter for RoPE
-dropout = 0.1  # Added some dropout for regularization
+dropout = 0.0  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
+value_emb = True
 
 # Optimization parameters
 # scale iters so total tokens ≈ constant across encodings (262M)
 max_iters = 5333 if encoding == 'byte' else 4000
-learning_rate = 1e-3 * (5000 / max_iters) # Scaled learning rate
+learning_rate = 0.94e-3 * (batch_size / 64) # Scaled learning rate
 lr_decay_iters = max_iters
 eval_interval = max_iters // 5
 log_interval = 500

@@ -67,6 +67,11 @@ class GPTWithRoPE(nn.Module):
             if self.config.perlayerembeds
             else nn.Identity()
         )
+        self.value_emb = None
+        if getattr(self.config, "value_emb", False):
+            self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
+            # Zero-init value_emb so ve starts as no-op; trains in only when useful
+            torch.nn.init.zeros_(self.value_emb.weight)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -106,20 +111,14 @@ class GPTWithRoPE(nn.Module):
         tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
 
         x = self.transformer.drop(tok_emb)
+        ve = None
+        if self.value_emb is not None:
+            ve = self.value_emb(idx)
         for ind, block in enumerate(self.transformer.h):
-            x = block(self.transformer["proj"][ind](x))
+            x = block(self.transformer["proj"][ind](x), ve=ve)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(self.down_proj(x))
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
-            )
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
-            loss = None
+        logits, loss = self.calc_loss(x, targets)
 
         return logits, loss
 
@@ -154,6 +153,22 @@ class GPTWithRoPE(nn.Module):
 
         return optimizer
 
+    def calc_loss(
+        self, x: torch.Tensor, targets: torch.Tensor = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if targets is not None:
+            logits = self.lm_head(self.down_proj(x))
+            logits = 15.0 * torch.tanh(logits / 15.0)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
+        else:
+            # inference: only last time step
+            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
+            logits = 15.0 * torch.tanh(logits / 15.0)
+            loss = None
+        return logits, loss
+
 
 class Block(nn.Module):
     def __init__(self, config, use_rope: bool = True, cross_attn: bool = False) -> None:
@@ -171,7 +186,9 @@ class Block(nn.Module):
         kv: Optional[torch.Tensor] = None,
         ve: Optional[torch.Tensor] = None,
     ):
-        x = x + self.attn(self.ln_1(x), self.ln_3(kv) if kv is not None else None, ve=ve)
+        x = x + self.attn(
+            self.ln_1(x), self.ln_3(kv) if kv is not None else None, ve=ve
+        )
         x = x + self.mlp(self.ln_2(x))
         return x
 

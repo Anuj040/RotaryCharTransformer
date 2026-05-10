@@ -2,7 +2,6 @@ import math
 
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 
 from src.utils.model_utilities.model import GPTConfig
 from src.utils.model_utilities.model_rope import Block, GPTWithRoPE
@@ -32,7 +31,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
     """
 
     def __init__(self, config: GPTConfig):
-        config.dropout = 0.0
         super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -83,7 +81,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
         self.ln_l = nn.RMSNorm(config.n_embd)
 
         self.h_init = nn.Parameter(torch.zeros(config.n_embd))
-        self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
         self.a_L = nn.Parameter(torch.tensor(1.0 / 3.0))
         self.a_H = nn.Parameter(torch.tensor(1.0 / 3.0))
@@ -120,8 +117,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
         # Untied lm_head with tight init (modded-nanoGPT style)
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
-        # Zero-init value_emb so ve starts as no-op; trains in only when useful
-        torch.nn.init.zeros_(self.value_emb.weight)
+        # # weight tying
+        # self.lm_head.weight = self.transformer.wte.weight
+
         # Init update_gate weight to 0; bias to 0 → initial sigmoid = 0.5 (half-update)
         torch.nn.init.zeros_(self.update_gate.weight)
         torch.nn.init.zeros_(self.update_gate.bias)
@@ -216,7 +214,9 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             z_H = self.h_init.expand_as(x_up).contiguous()
         if self.share_blocks:
             # TRM-like recursive tiny model with truncated BPTT
-            ve = self.value_emb(idx)
+            ve = None
+            if self.value_emb is not None:
+                ve = self.value_emb(idx)
             z_H, z_L = self._deep_recursion(x, z_H, z_L, ve=ve)
             x = z_H
 
@@ -229,16 +229,6 @@ class TRMGPTWithRoPE(GPTWithRoPE):
             q_halt_logits = None  # no q_head in non-recursive mode
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            logits = self.lm_head(self.down_proj(x))
-            logits = 15.0 * torch.tanh(logits / 15.0)
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
-            )
-        else:
-            # inference: only last time step
-            logits = self.lm_head(self.down_proj(x[:, [-1], :]))
-            logits = 15.0 * torch.tanh(logits / 15.0)
-            loss = None
+        logits, loss = self.calc_loss(x, targets)
 
         return logits, loss, z_H.detach(), z_L.detach(), q_halt_logits

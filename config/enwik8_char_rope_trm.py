@@ -2,7 +2,7 @@ import torch
 
 
 # Configuration for the modified model
-out_dir = 'outputs/may02_multiscale_rope_lo100'  # Output directory for model checkpoints and logs
+out_dir = 'outputs/may02_full0.9lr'  # Output directory for model checkpoints and logs
 
 always_save_checkpoint = True  # Ensure we save checkpoints
 wandb_log = False
@@ -20,10 +20,10 @@ block_size = 768 if encoding == 'byte' else 256
 n_layer = 8
 n_head = 8
 n_embd = 512
-freq = 10000    # high-freq RoPE for heads 0..3 (local patterns)
-freq_lo = 100  # low-freq RoPE for heads 4..7; period~628 ≈ context length
-dropout = 0.1  # Added some dropout for regularization
+freq = 10000  # Frequency parameter for RoPE (set freq_lo != freq to enable multi-scale)
+dropout = 0.0  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
+value_emb = True
 perlayerembeds = False
 num_recursive_steps = 4
 num_deep_recursions = 2
@@ -32,7 +32,7 @@ num_deep_recursions = 2
 # scale iters so total tokens ≈ constant across encodings
 # byte 64×768: 49152 tok/iter → 262M/49152 ≈ 5333; char 128×256: 32768 tok/iter → 8000
 max_iters = 5333 if encoding == 'byte' else 8000
-learning_rate = 1e-3 * (5000 / max_iters) # Scaled learning rate
+learning_rate = 0.94e-3 * (batch_size / 64) # Scaled learning rate
 lr_decay_iters = max_iters
 eval_interval = max_iters // 5
 log_interval = 500
