@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 import wandb
 from src.utils.data_utils.prepare_dataset import get_dataloaders
+from src.utils.eval_utils.loss_fn import estimate_loss
 from src.utils.model_utilities.pick_model import select_model
 from src.utils.train_utils.misc import get_lr
 
@@ -37,7 +38,6 @@ def main():
         exec(f.read(), {}, config)
 
     config = {k: v for k, v in config.items() if not k.startswith("__")}
-
     if "out_dir" not in config:
         print("Error: 'out_dir' not specified in the configuration file.")
         return
@@ -135,20 +135,6 @@ def main():
             config=get_serializable_config(config),
         )
 
-    @torch.inference_mode()
-    def estimate_loss():
-        out = {}
-        model.eval()
-        losses = torch.zeros(len(val_loader))
-        for ind, (X, Y) in enumerate(val_loader):
-            X, Y = X.to(device), Y.to(device)
-            with ctx:
-                _, loss = model(X, Y)
-            losses[ind] = loss.item()
-        out["val"] = losses.mean()
-        model.train()
-        return out
-
     t0 = time.time()
 
     local_iter_num = 0
@@ -189,21 +175,21 @@ def main():
             t0 = t1
 
             if iter_num % config["eval_interval"] == 0 and master_process:
-                losses = estimate_loss()
+                losses = estimate_loss(model, val_loader, device, config, ctx)
                 print(
-                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses['val']:.4f} | val_bpc {losses['val'] / math.log(2):8.3f}"
+                    f"\nStep {iter_num}: train loss {np.mean(train_losses):.4f}, val loss {losses["val_0"]:.4f} | val_bpc {losses["val_0"] / math.log(2):8.3f}"
                 )
                 wandb.log(
                     {
                         "step": iter_num,
                         "train_loss": np.mean(train_losses),
-                        "val_loss": losses["val"],
-                        "val_bpc": losses["val"] / math.log(2),
+                        "val_loss": losses["val_0"],
+                        "val_bpc": losses["val_0"] / math.log(2),
                     },
                     step=iter_num,
                 )
-                if losses["val"] < best_val_loss or config["always_save_checkpoint"]:
-                    best_val_loss = losses["val"]
+                if losses["val_0"] < best_val_loss or config["always_save_checkpoint"]:
+                    best_val_loss = losses["val_0"]
                     checkpoint = {
                         "model": raw_model.state_dict(),
                         "optimizer": optimizer.state_dict(),

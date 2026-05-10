@@ -22,11 +22,15 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
 
 class Muon(Optimizer):
     def __init__(self, params, lr=0.02, momentum=0.95, weight_decay=0.0, ns_steps=5):
-        defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, ns_steps=ns_steps)
+        defaults = dict(
+            lr=lr, momentum=momentum, weight_decay=weight_decay, ns_steps=ns_steps
+        )
         super().__init__(params, defaults)
 
     @staticmethod
-    def momentum_schedule(step: int, warmup_steps: int = 300, start: float = 0.85, end: float = 0.95) -> float:
+    def momentum_schedule(
+        step: int, warmup_steps: int = 300, start: float = 0.85, end: float = 0.95
+    ) -> float:
         frac = min(step / max(1, warmup_steps), 1.0)
         return (1 - frac) * start + frac * end
 
